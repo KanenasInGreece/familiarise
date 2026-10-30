@@ -27,7 +27,8 @@
 #   0  .env copied (or no tunnel is open, which changes nothing)
 #   1  not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
 #      or the existing .env could not be backed up (backup path exists, or the backup failed its check);
-#      or the existing .env could not be hashed.
+#      or the existing .env could not be hashed; or the shared-memory .env is a symlink ("shared-memory .env
+#      is a symlink; replace it with a regular file first. Nothing copied.").
 #      Nothing is copied. (A failed copy or copy check also exits 1, after the backup.)
 #   2  no token file exists for this framework
 # Exit codes (--version): 0.
@@ -253,9 +254,10 @@ hash_of() { sha256sum < "$1" 2>/dev/null | cut -d' ' -f1; }
 
 DEST="$SHARED_MEMORY_SKILL_DIR/.env"
 INDEX="$FRAMEWORK_ENV_DIR/.index"
+[ -L "$DEST" ] && fail "shared-memory .env is a symlink; replace it with a regular file first. Nothing copied."
 if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
-    # Keep the current .env unless it is a known token. "Known" means its sha256 is in .index. Only DEST
-    # is read; no other token file is opened. No index, or a token that predates it: not known, so back up.
+    # Keep the current .env unless it is a known token. "Known" means its sha256 is in .index. DEST
+    # is hashed, plus on a hit the one framework file the index names (never any other). No index, or a token that predates it: not known, so back up.
     matched=0
     dest_hash="$(hash_of "$DEST")"
     [ -n "$dest_hash" ] || fail "could not hash the current .env. Nothing copied."
@@ -265,7 +267,7 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
         while read -r _h _n; do
             [ "$_h" = "$dest_hash" ] || continue
             _f="$FRAMEWORK_ENV_DIR/$_n"
-            if [ -f "$_f" ] && [ ! -L "$_f" ] && [ "$(hash_of "$_f")" = "$_h" ]; then
+            if [ -f "$_f" ] && [ ! -L "$_f" ] && [ ! "$_f" -ef "$DEST" ] && [ "$(hash_of "$_f")" = "$_h" ]; then
                 matched=1; break
             fi
         done < <(awk 'NF==2 && length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/' "$INDEX" 2>/dev/null)
@@ -285,8 +287,13 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
     fi
 fi
 
-cp "$SRC" "$DEST" && chmod 600 "$DEST" || fail "could not copy $SRC to $DEST"
-cmp -s "$SRC" "$DEST" || fail "copy verification failed"
+# Atomic copy: temp file beside DEST (mode 600 from creation), verified, then renamed over DEST.
+# DEST is never written in place, so a hard link to a token file is replaced, not overwritten.
+dest_tmp="$(umask 077; mktemp "$SHARED_MEMORY_SKILL_DIR/.env.tmp.XXXXXX" 2>/dev/null)" \
+    || fail "could not create a temporary file in $SHARED_MEMORY_SKILL_DIR. Nothing copied."
+{ cp -- "$SRC" "$dest_tmp" && chmod 600 "$dest_tmp" && cmp -s "$SRC" "$dest_tmp"; } 2>/dev/null \
+    || { rm -f -- "$dest_tmp"; fail "could not copy $SRC to $DEST (copy verification failed)"; }
+mv -T -f -- "$dest_tmp" "$DEST" || { rm -f -- "$dest_tmp"; fail "could not replace $DEST"; }
 
 # --- fingerprint index: "<sha256>  .env-<host>", hashes only, one line per host, replaced atomically ---
 src_hash="$(hash_of "$SRC")"

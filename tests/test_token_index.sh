@@ -133,6 +133,27 @@ run alpha; run beta; rc=$?
 check "i: backslash in SHARED_MEMORY_SKILL_DIR: indexed switch makes no backup" $?
 SM="$SM_SAVE"; printf 'SHARED_MEMORY_SKILL_DIR=%s\nFRAMEWORK_ENV_DIR=%s\n' "$SM" "$FW" > "$S/config.env"
 
+# j1. DEST is a symlink to .env-alpha: refuse, token untouched
+reset; cp "$FW/.env-alpha" "$S/alpha.copy"; ln -s "$FW/.env-alpha" "$SM/.env"
+run beta; rc=$?
+[ "$rc" = 1 ] && grep -q 'is a symlink' "$S/out" && cmp -s "$FW/.env-alpha" "$S/alpha.copy" && [ -L "$SM/.env" ] && [ "$(unsaved)" = 0 ]
+check "j1: DEST symlink to .env-alpha: exit 1, .env-alpha unchanged, nothing copied" $?
+rm -f "$SM/.env"
+
+# j2. DEST is a hard link of .env-alpha (indexed): back up first, .env-alpha keeps its bytes
+reset; run alpha; rm -f "$SM/.env"; ln "$FW/.env-alpha" "$SM/.env"
+run beta; rc=$?
+b="$(find "$FW" -maxdepth 1 -name '.env-unsaved-*' | head -1)"
+[ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && [ -n "$b" ] && cmp -s "$b" "$S/alpha.copy" && cmp -s "$FW/.env-alpha" "$S/alpha.copy" \
+  && cmp -s "$SM/.env" "$FW/.env-beta" && [ ! "$SM/.env" -ef "$FW/.env-alpha" ]
+check "j2: DEST hard link of .env-alpha: backed up first, .env-alpha keeps its bytes" $?
+
+# j3. normal switch: DEST is a regular file with the new bytes, no temp files
+reset; run alpha; run beta; rc=$?
+[ "$rc" = 0 ] && [ -f "$SM/.env" ] && [ ! -L "$SM/.env" ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(mode "$SM/.env")" = 600 ] \
+  && [ "$(find "$SM" -maxdepth 1 -name '.env.tmp.*' | wc -l)" = 0 ]
+check "j3: switch leaves a regular 600 .env with the new bytes and no temp files" $?
+
 # f. existing tests
 for t in "$REPO"/tests/test_*.sh; do
     [ "$(basename "$t")" = test_token_index.sh ] && continue

@@ -50,7 +50,7 @@ Requirements: Linux. Needs bash, ssh, curl and git.
 - `0`: copied, or no framework session (nothing changed)
 - `1`: not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
   or the existing `.env` could not be backed up (backup path exists, or the backup failed its check);
-  or the existing `.env` could not be hashed.
+  or the existing `.env` could not be hashed; or the shared-memory `.env` is a symlink ("shared-memory .env is a symlink; replace it with a regular file first. Nothing copied.").
   Nothing is copied. (A failed copy or copy check also exits 1, after the backup.) Report the message.
 - `2`: no token file for this framework. Nothing was copied. The operator must add it.
 

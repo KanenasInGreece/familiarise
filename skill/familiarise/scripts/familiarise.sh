@@ -8,7 +8,9 @@
 #
 # Exit codes:
 #   0  .env copied (or no tunnel is open, which changes nothing)
-#   1  the tunnel is not in a usable state
+#   1  not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
+#      or the existing .env could not be backed up (backup path exists, or the backup failed its check).
+#      Nothing is copied. (A failed copy or copy check also exits 1, after the backup.)
 #   2  no token file exists for this framework
 #
 # Never prints a token. Never sources a .env.

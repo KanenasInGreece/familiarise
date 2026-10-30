@@ -29,7 +29,9 @@ bash <this-skill-dir>/scripts/familiarise.sh
 ## Exit codes
 
 - `0`: copied, or no framework session (nothing changed)
-- `1`: the session or tunnel is not usable. Nothing was copied. Report the message.
+- `1`: not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
+  or the existing `.env` could not be backed up (backup path exists, or the backup failed its check).
+  Nothing is copied. (A failed copy or copy check also exits 1, after the backup.) Report the message.
 - `2`: no token file for this framework. Nothing was copied. The operator must add it.
 
 ## Rules

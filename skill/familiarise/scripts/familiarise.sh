@@ -23,7 +23,10 @@
 #   2  no token file exists for this framework
 # Exit codes (--version): 0.
 # Exit codes (--update): 0 up to date or updated; 1 any failure (no git, no tags, network or clone
-#   failure, VERSION mismatch, backup or copy failure). Nothing is changed on failure.
+#   failure, unsafe tag content such as a symlink, malformed local VERSION, VERSION mismatch, backup or
+#   install failure). On an install failure every replaced file is restored from the backup; VERSION is
+#   installed last, so a failed update never leaves a new VERSION over old files. If the rollback itself
+#   fails, the message says so and names the backup.
 # Unknown arguments: usage on stderr, exit 1.
 #
 # Never prints a token. Never sources a .env.
@@ -45,16 +48,35 @@ local_version() {
     echo "${v:-0.1.0}"
 }
 
+# git with a 60 s limit when `timeout` exists.
+gitt() {
+    if command -v timeout >/dev/null 2>&1; then timeout 60 git "$@"; else git "$@"; fi
+}
+
+# Copy $1 to $2 through an unpredictable temp name in the destination dir, verify, rename over.
+# Refuses a destination that is a directory or symlink. Returns 1 on any failure (dest unchanged).
+install_one() {
+    local s="$1" d="$2" t
+    { [ -d "$d" ] || [ -L "$d" ]; } && return 1
+    t="$(mktemp "$(dirname -- "$d")/.familiarise-new.XXXXXX")" || return 1
+    { cp -p -- "$s" "$t" && cmp -s "$s" "$t" && mv -T -f -- "$t" "$d"; } \
+        || { rm -f -- "$t"; return 1; }
+}
+
 do_update() {
     local repo="${FAMILIARISE_REPO:-https://github.com/KanenasInGreece/familiarise.git}"
-    local local_v remote_v tags latest tmp stamp bdir f base
+    local local_v remote_v tags latest tmp stamp bdir f base rel
     command -v git >/dev/null 2>&1 || fail "git is not installed. Nothing changed."
     export GIT_TERMINAL_PROMPT=0
     local_v="$(local_version)"
-    tags="$(git ls-remote --tags --refs -- "$repo" 2>/dev/null)" \
+    printf '%s\n' "$local_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        || fail "local VERSION '$local_v' is not X.Y.Z. Fix or remove the VERSION file. Nothing changed."
+    tags="$(gitt ls-remote --tags --refs -- "$repo" 2>/dev/null)" \
         || fail "could not reach $repo. Nothing changed."
     latest="$(printf '%s\n' "$tags" | sed -n 's|.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' | sort -V | tail -n 1)"
     [ -n "$latest" ] || fail "no release tags (vX.Y.Z) found at $repo. Nothing changed."
+    printf '%s\n' "$latest" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+        || fail "unexpected tag name. Nothing changed."
     remote_v="${latest#v}"
     if [ "$(printf '%s\n%s\n' "$local_v" "$remote_v" | sort -V | tail -n 1)" = "$local_v" ]; then
         say "up to date ($local_v)"
@@ -63,13 +85,26 @@ do_update() {
 
     tmp="$(mktemp -d)" || fail "could not create a temp dir. Nothing changed."
     trap 'rm -rf -- "$tmp"' EXIT
-    git clone --quiet --depth 1 --branch "$latest" -- "$repo" "$tmp/src" >/dev/null 2>&1 \
-        || fail "could not clone $latest from $repo. Nothing changed."
+    # Fetch only the tag ref (refs/tags/...), so a branch of the same name is never used.
+    { git init -q -- "$tmp/src" >/dev/null 2>&1 \
+        && gitt -C "$tmp/src" fetch -q --depth 1 -- "$repo" "refs/tags/$latest" >/dev/null 2>&1 \
+        && git -C "$tmp/src" checkout -q FETCH_HEAD >/dev/null 2>&1; } \
+        || fail "could not fetch tag $latest from $repo. Nothing changed."
     local src="$tmp/src/skill/familiarise"
-    [ -f "$src/VERSION" ] && [ "$(head -n 1 "$src/VERSION" | tr -d '[:space:]')" = "$remote_v" ] \
+    # Every source must be a regular file, not a symlink (a link could pull in a local file).
+    for f in SKILL.md CONSTITUTION_SNIPPET.md VERSION; do
+        { [ -f "$src/$f" ] && [ ! -L "$src/$f" ]; } \
+            || fail "tag $latest: $f is missing or not a regular file. Nothing changed."
+    done
+    { [ -d "$src/scripts" ] && [ ! -L "$src/scripts" ]; } \
+        || fail "tag $latest: scripts/ is missing or a symlink. Nothing changed."
+    for f in "$src"/scripts/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        { [ -f "$f" ] && [ ! -L "$f" ]; } \
+            || fail "tag $latest: scripts/$(basename -- "$f") is not a regular file. Nothing changed."
+    done
+    [ "$(head -n 1 "$src/VERSION" | tr -d '[:space:]')" = "$remote_v" ] \
         || fail "tag $latest does not carry VERSION $remote_v. Nothing changed."
-    [ -f "$src/SKILL.md" ] && [ -f "$src/CONSTITUTION_SNIPPET.md" ] && [ -d "$src/scripts" ] \
-        || fail "tag $latest is missing release files. Nothing changed."
 
     # Backup first, verified byte for byte.
     stamp="$(date +%Y%m%d-%H%M%S)"
@@ -85,25 +120,47 @@ do_update() {
     done
     for f in "$SKILL_ROOT"/scripts/*; do
         [ -f "$f" ] || continue
-        base="$(basename "$f")"
+        base="$(basename -- "$f")"
         cp -p -- "$f" "$bdir/scripts/$base" && cmp -s "$f" "$bdir/scripts/$base" \
             || fail "backup of scripts/$base failed verification ($bdir). Nothing changed."
     done
 
-    # Install: temp name in the same directory, then atomic rename.
-    local tmpf
-    for f in SKILL.md CONSTITUTION_SNIPPET.md VERSION; do
-        tmpf="$SKILL_ROOT/.$f.new.$$"
-        { cp -- "$src/$f" "$tmpf" && cmp -s "$src/$f" "$tmpf" && mv -f -- "$tmpf" "$SKILL_ROOT/$f"; } \
-            || { rm -f -- "$tmpf"; fail "could not install $f. Backup is at $bdir."; }
+    # Install SKILL.md, snippet and scripts first, VERSION last. Record each replaced file; on any
+    # failure restore all of them (from the backup, or delete if it did not exist before).
+    local -a done_rel=()
+    local failed="" i
+    for rel in SKILL.md CONSTITUTION_SNIPPET.md; do
+        done_rel+=("$rel")
+        install_one "$src/$rel" "$SKILL_ROOT/$rel" || { failed="$rel"; break; }
     done
-    for f in "$src"/scripts/*; do
-        [ -f "$f" ] || continue
-        base="$(basename "$f")"
-        tmpf="$SKILL_ROOT/scripts/.$base.new.$$"
-        { cp -p -- "$f" "$tmpf" && cmp -s "$f" "$tmpf" && mv -f -- "$tmpf" "$SKILL_ROOT/scripts/$base"; } \
-            || { rm -f -- "$tmpf"; fail "could not install scripts/$base. Backup is at $bdir."; }
-    done
+    if [ -z "$failed" ]; then
+        for f in "$src"/scripts/*; do
+            [ -e "$f" ] || continue
+            rel="scripts/$(basename -- "$f")"
+            done_rel+=("$rel")
+            install_one "$f" "$SKILL_ROOT/$rel" || { failed="$rel"; break; }
+        done
+    fi
+    if [ -z "$failed" ]; then
+        done_rel+=("VERSION")
+        install_one "$src/VERSION" "$SKILL_ROOT/VERSION" || failed="VERSION"
+    fi
+    if [ -n "$failed" ]; then
+        local rb=0
+        for (( i=${#done_rel[@]}-1; i>=0; i-- )); do
+            rel="${done_rel[$i]}"
+            if [ -f "$bdir/$rel" ]; then
+                install_one "$bdir/$rel" "$SKILL_ROOT/$rel" || rb=1
+            elif [ -f "$SKILL_ROOT/$rel" ] && [ ! -L "$SKILL_ROOT/$rel" ]; then
+                rm -f -- "$SKILL_ROOT/$rel" || rb=1
+            fi
+        done
+        if [ "$rb" = 0 ]; then
+            fail "could not install $failed; earlier changes were rolled back. Backup is at $bdir."
+        else
+            fail "could not install $failed and the rollback was incomplete. Restore from $bdir."
+        fi
+    fi
     say "updated $local_v -> $remote_v"
     say "backup: $bdir"
     say "note: ~/framework-tunnel.sh is not touched by --update; use scripts/sync_local.sh for the tunnel script."

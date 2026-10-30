@@ -26,7 +26,10 @@ bash <this-skill-dir>/scripts/familiarise.sh --update    # install the newest ta
 `https://github.com/KanenasInGreece/familiarise.git`), never downgrades, backs up to
 `.backup/<version>-<timestamp>/` (verified), then replaces only `SKILL.md`, `CONSTITUTION_SNIPPET.md`,
 `VERSION` and `scripts/*`. It never touches `.env` or `frameworks/`, nor `~/framework-tunnel.sh`
-(use `scripts/sync_local.sh` for that). Without a `VERSION` file the version is `0.1.0`.
+(use `scripts/sync_local.sh` for that). Without a `VERSION` file the version is `0.1.0`; a `VERSION`
+that is not `X.Y.Z` is an error.
+
+Requirements: Linux. Needs bash, ssh, curl and git.
 
 ## What it does
 
@@ -46,7 +49,8 @@ bash <this-skill-dir>/scripts/familiarise.sh --update    # install the newest ta
 - `2`: no token file for this framework. Nothing was copied. The operator must add it.
 
 `--version` exits 0. `--update` exits 0 (up to date, or updated) or 1 (no git, no tags, network or clone
-failure, VERSION mismatch, backup or copy failure; nothing changed). An unknown argument exits 1.
+failure, symlink or non-regular file in the tag, malformed local VERSION, VERSION mismatch, backup or
+install failure; a failed install is rolled back from the backup, and VERSION is installed last). An unknown argument exits 1.
 
 ## Rules
 

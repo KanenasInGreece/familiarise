@@ -49,8 +49,11 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
         echo "✗ a test override is set, so FRAMEWORK_TUNNEL_STATE_DIR must be set to a scratch folder too." >&2
         exit 1
     fi
-    if [ "$(realpath -m -- "$STATE_DIR")" = "$(realpath -m -- "$HOME/.config/shared-memory")" ]; then
-        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir ($HOME/.config/shared-memory)." >&2
+    # Compare resolved real paths against the passwd home, not $HOME, so HOME=/other cannot hide it.
+    REAL_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    if [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "${REAL_HOME:-$HOME}/.config/shared-memory")" ] ||
+       [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "$HOME/.config/shared-memory")" ]; then
+        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir (${REAL_HOME:-$HOME}/.config/shared-memory)." >&2
         exit 1
     fi
 fi
@@ -63,7 +66,6 @@ if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then
 fi
 
 SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
-mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
 
 port_busy() {
     ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${LOCAL_PORT}\$"
@@ -74,7 +76,7 @@ gateway_ok() {
 }
 
 master_up() {
-    "$SSH" -S "$SOCK" -O check "$HOST" >/dev/null 2>&1
+    "$SSH" -S "${1:-$SOCK}" -O check "$HOST" >/dev/null 2>&1
 }
 
 pid_alive() {
@@ -83,22 +85,30 @@ pid_alive() {
 
 # The state file is written by the session. It holds the session script pid and the shell pid.
 read_state() {
-    S_HOST=""; S_MAIN=""; S_SHELL=""
+    S_HOST=""; S_MAIN=""; S_SHELL=""; S_SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
     [ -f "$STATE_FILE" ] || return 1
     while IFS='=' read -r key val; do
         case "$key" in
             HOST) S_HOST="$val" ;;
             MAIN_PID) S_MAIN="$val" ;;
             SHELL_PID) S_SHELL="$val" ;;
+            SOCK) S_SOCK="$val" ;;
         esac
     done < "$STATE_FILE"
     return 0
 }
 
-# Closes the ssh master, which closes the forward, and removes the state.
+# Closes the ssh master on socket $1 (default: this session's own), which closes the forward.
+close_master() {
+    local s="${1:-$SOCK}"
+    master_up "$s" && "$SSH" -S "$s" -O exit "$HOST" >/dev/null 2>&1
+    rm -f "$s"
+}
+
+# Closes the master named by the state (S_SOCK) and removes the state.
 close_tunnel() {
-    master_up && "$SSH" -S "$SOCK" -O exit "$HOST" >/dev/null 2>&1
-    rm -f "$SOCK" "$STATE_FILE"
+    close_master "${S_SOCK:-$SOCK}"
+    rm -f "$STATE_FILE"
 }
 
 # True if pid $1 is the session shell started by session script pid $2.
@@ -113,13 +123,15 @@ is_session_shell() {
     return 1
 }
 
-# Exit handler of a session: close the tunnel only if the state still belongs to this script.
-# A newer session's state and socket must never be removed by an older session's handler.
+# Exit handler of a session. Every session has its own ssh socket ($SOCK, ssh-<port>-<pid>.sock), so it
+# always closes that one master and never a socket another session made. The shared state file is
+# removed only if it is missing or names this session.
 own_cleanup() {
+    close_master "$SOCK"
     if read_state && [ "$S_MAIN" != "$$" ]; then
         return 0
     fi
-    close_tunnel
+    rm -f "$STATE_FILE"
 }
 
 do_status() {
@@ -175,8 +187,9 @@ do_stop() {
             sleep 0.25
         done
         if pid_alive "$S_SHELL" && is_session_shell "$S_SHELL" "$S_MAIN"; then
-            echo "✗ the session shell (pid $S_SHELL) is still running. Not closing the tunnel." >&2
-            echo "  End what is running in it, or exit it, then run stop again. State left in $STATE_FILE." >&2
+            echo "! the session shell (pid $S_SHELL) is busy. The close is requested and still pending." >&2
+            echo "  The tunnel stays up until the running command ends; then the shell exits and the tunnel closes by itself." >&2
+            echo "  State stays in $STATE_FILE until then. Do not run stop again; check with: $NAME $HOST status" >&2
             exit 1
         fi
     elif pid_alive "$S_MAIN"; then
@@ -190,41 +203,56 @@ do_stop() {
 }
 
 # Start lock: held from the checks until the state file is written, so two starts cannot both pass.
-# flock when available (fd 9, released on exit); otherwise an atomic mkdir with the owner pid inside.
+# An atomic mkdir with the owner pid inside. It leaves no file behind once released (flock would leave
+# an empty start.lock).
 LOCK="$STATE_DIR/start.lock"
 LOCK_KIND=""
 acquire_lock() {
-    if command -v flock >/dev/null 2>&1; then
-        exec 9>"$LOCK"
-        flock -n 9 || return 1
-        LOCK_KIND=flock
-        return 0
-    fi
-    if ! mkdir "$LOCK.d" 2>/dev/null; then
-        local owner
+    local tries=0 owner stale
+    while ! mkdir "$LOCK.d" 2>/dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -le 5 ] || return 1
         owner="$(cat "$LOCK.d/pid" 2>/dev/null)"
-        pid_alive "$owner" && return 1
-        rm -rf "$LOCK.d"            # owner is gone: stale lock
-        mkdir "$LOCK.d" 2>/dev/null || return 1
-    fi
+        if [ -z "$owner" ]; then
+            # The holder may be between mkdir and writing its pid: held, unless the dir is old.
+            [ $(( $(date +%s) - $(stat -c %Y "$LOCK.d" 2>/dev/null || echo 0) )) -lt 5 ] && return 1
+        elif pid_alive "$owner"; then
+            return 1
+        fi
+        # Stale: take it by atomic rename, so only one contender wins. If what we moved is not the
+        # stale lock we judged (a new holder got in first), put it back and report busy.
+        stale="$LOCK.stale.$$"
+        if mv "$LOCK.d" "$stale" 2>/dev/null; then
+            if [ "$(cat "$stale/pid" 2>/dev/null)" != "$owner" ]; then
+                mv "$stale" "$LOCK.d" 2>/dev/null || rm -rf "$stale"
+                return 1
+            fi
+            rm -rf "$stale"
+        fi
+    done
     echo "$$" > "$LOCK.d/pid"
+    rm -f "$LOCK"                   # empty file left by older versions that used flock
     LOCK_KIND=mkdir
 }
 
 release_lock() {
     case "$LOCK_KIND" in
-        flock) exec 9>&- ;;
-        mkdir) rm -rf "$LOCK.d" ;;
+        mkdir) [ "$(cat "$LOCK.d/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK.d" ;;
     esac
     LOCK_KIND=""
 }
 
 do_start() {
+    SOCK="$STATE_DIR/ssh-$LOCAL_PORT-$$.sock"          # this session's own socket
+    mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
+    # Release the lock, and close this session's own master if ssh got that far, on every way out,
+    # signals included (bash runs a trap after the foreground command ends; the EXIT trap runs after `exit 1`).
+    trap 'release_lock; own_cleanup' EXIT
+    trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
         echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
         exit 1
     fi
-    trap release_lock EXIT
     if read_state; then
         if pid_alive "$S_MAIN"; then
             echo "✗ a tunnel to '$S_HOST' is already open (session pid $S_MAIN)." >&2
@@ -246,7 +274,7 @@ do_start() {
     # ssh authenticates in this terminal, then forks into the background as the control master.
     if ! "$SSH" -M -S "$SOCK" -f -N \
             -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -o ConnectTimeout=15 -L "$LOCAL_PORT:localhost:$REMOTE_PORT" "$HOST" 9>&-; then
+            -o ConnectTimeout=15 -L "$LOCAL_PORT:localhost:$REMOTE_PORT" "$HOST"; then
         rm -f "$SOCK"
         echo "✗ could not open the ssh tunnel to '$HOST'" >&2
         echo "  If the key is passphrase-protected: ssh-add ~/.ssh/id_ed25519" >&2
@@ -259,12 +287,12 @@ do_start() {
     done
     if ! gateway_ok; then
         echo "✗ the tunnel is up, but the gateway on localhost:$LOCAL_PORT does not answer /health" >&2
-        close_tunnel
+        close_master "$SOCK"
         exit 1
     fi
 
     local rc="$STATE_DIR/session-rc.$$"
-    printf 'HOST=%s\nMAIN_PID=%s\n' "$HOST" "$$" > "$STATE_FILE"
+    printf 'HOST=%s\nMAIN_PID=%s\nSOCK=%s\n' "$HOST" "$$" "$SOCK" > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
     release_lock
     # The session shell records its own pid, so `stop` can end it.

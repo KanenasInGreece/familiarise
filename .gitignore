@@ -7,3 +7,6 @@ frameworks/
 .env-unsaved-*
 __pycache__/
 *.pyc
+
+# Top-level scripts/ is local to this folder (sync_local.sh), not part of the skill.
+scripts/

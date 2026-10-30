@@ -106,5 +106,35 @@ r=$?
 if [ "$r" = 0 ]; then ok "k: no cat/cmp/sha256sum/grep/cp/... call names a token file ($(wc -l < "$CALLS") shimmed calls)"
 else bad "k: shimmed tool touched a token path"; cat "$CALLS"; fi
 
+# l: M1 backup path appears just before the real mv: earlier backup bytes kept, DEST unchanged
+rm -f "$D" "$FW"/.env-unsaved-*; printf 'foreign-l\n' > "$D"
+SH="$S/shiml"; mkdir -p "$SH"; REALMV="$(command -v mv)"
+printf '#!/bin/sh\nfor a; do l=$a; done\nprintf earlier-backup > "$l"\nexec "%s" "$@"\n' "$REALMV" > "$SH/mv"; chmod +x "$SH/mv"
+printf 'HOST=alpha\nMAIN_PID=%s\n' "$$" > "$ST/active-framework"
+FAMILIARISE_NOW=T2 PATH="$SH:$PATH" bash "$INST/scripts/familiarise.sh" >"$S/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && [ "$(cat "$FW/.env-unsaved-T2")" = "earlier-backup" ] && [ -f "$D" ] && [ ! -L "$D" ] && [ "$(cat "$D")" = "foreign-l" ] \
+  && grep -q 'appeared during the run' "$S/out"
+check "l: backup path appearing before mv is not overwritten, DEST unchanged" $?
+rm -f "$FW"/.env-unsaved-* "$D"; ln -s "$FW/.env-beta" "$D"
+
+# m: lock held elsewhere
+( exec 8>"$FW/.lock"; flock 8; sleep 5 ) & LP=$!
+sleep 0.5
+before="$(readlink "$D")"; run alpha; rc=$?
+kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null
+[ "$rc" = 1 ] && grep -q 'another familiarise is running' "$S/out" && [ "$(readlink "$D")" = "$before" ]
+check "m: busy lock exits 1, DEST unchanged" $?
+
+# n: relative FRAMEWORK_ENV_DIR
+printf 'SHARED_MEMORY_SKILL_DIR=%s\nFRAMEWORK_ENV_DIR=relfw\n' "$SM" > "$S/config-rel.env"
+printf 'HOST=alpha\nMAIN_PID=%s\n' "$$" > "$ST/active-framework"
+FAMILIARISE_ENV="$S/config-rel.env" bash "$INST/scripts/familiarise.sh" >"$S/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && grep -q 'absolute' "$S/out" && [ "$(readlink "$D")" = "$before" ]
+check "n: relative FRAMEWORK_ENV_DIR exits 1, nothing changed" $?
+
+# o: directory target exits 2
+mkdir "$FW/.env-dirhost"; run dirhost; rc=$?
+[ "$rc" = 2 ] && [ "$(readlink "$D")" = "$before" ]; check "o: directory target exits 2, DEST unchanged" $?
+
 [ "$FAIL" = 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$FAIL"

@@ -32,7 +32,15 @@
 #      writable; DEST is neither a regular file nor a symlink; backup path exists or the move failed;
 #      link creation or rename failed; verification failed. On a refusal before the backup move, nothing
 #      changed.
-#   2  no token file exists for this framework (nothing changed)
+#   2  no token file for this framework: missing, or not a regular file (a directory is exit 2); nothing changed
+# 143  killed by TERM/INT/HUP: the temp link is removed and the lock released. If the backup move had
+#      happened, stderr says the token is at the .env-unsaved path and DEST is absent.
+# After the backup move, DEST is absent until the link lands: any failure then names the backup path.
+# The backup move is no-clobber (mv -n). Across devices mv copies the bytes, and a failed move can leave
+# a partial copy at the backup path while the original stays at DEST (that message names both).
+# One run at a time: flock on FRAMEWORK_ENV_DIR/.lock; busy: exit 1 "another familiarise is running".
+# FRAMEWORK_ENV_DIR must be an absolute path (exit 1 otherwise). The link is verified by resolution
+# (readlink -f of DEST equals that of the target); a bad link is removed.
 # Exit codes (--version): 0.
 # Exit codes (--update): 0 up to date or updated; 1 any failure (no git, no tags, network or clone
 #   failure, unsafe tag content such as a symlink (also as skill/ or skill/familiarise), a symlink among the
@@ -216,6 +224,10 @@ done < <(grep -E '^[A-Z_]+=' "$CONFIG")
 
 [ -n "$SHARED_MEMORY_SKILL_DIR" ] || fail "SHARED_MEMORY_SKILL_DIR is not set in $CONFIG"
 [ -n "$FRAMEWORK_ENV_DIR" ]       || fail "FRAMEWORK_ENV_DIR is not set in $CONFIG"
+case "$FRAMEWORK_ENV_DIR" in
+    /*) ;;
+    *) fail "FRAMEWORK_ENV_DIR must be an absolute path ($FRAMEWORK_ENV_DIR). Nothing changed." ;;
+esac
 [ -f "$SHARED_MEMORY_SKILL_DIR/scripts/memory_bridge.py" ] \
     || fail "no shared-memory skill at $SHARED_MEMORY_SKILL_DIR (memory_bridge.py not found)"
 
@@ -247,13 +259,18 @@ GATEWAY_VERSION="$(echo "$HEALTH" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
 
 # --- token file ------------------------------------------------------------------------------------
 # Only file names and links are touched from here on: no token file is read, copied or hashed.
-mkdir -p "$FRAMEWORK_ENV_DIR" && chmod 700 "$FRAMEWORK_ENV_DIR"
+mkdir -p "$FRAMEWORK_ENV_DIR" && chmod 700 "$FRAMEWORK_ENV_DIR" \
+    || fail "could not create or secure $FRAMEWORK_ENV_DIR. Nothing changed."
+# One familiarise at a time (lock on fd 9, released when the script exits).
+exec 9>"$FRAMEWORK_ENV_DIR/.lock" && flock -n 9 \
+    || fail "another familiarise is running; nothing changed."
 TARGET="$FRAMEWORK_ENV_DIR/.env-$HOST"
-if [ ! -f "$TARGET" ] || [ -L "$TARGET" ]; then
-    if [ -L "$TARGET" ]; then
-        fail "token file for '$HOST' is a symlink ($TARGET). Nothing changed."
-    fi
-    say "✗ no token file for '$HOST'. Expected: $TARGET"; say "The operator adds it. .env was not changed."; exit 2
+if [ -L "$TARGET" ]; then
+    fail "token file for '$HOST' is a symlink ($TARGET). Nothing changed."
+fi
+if [ ! -f "$TARGET" ]; then
+    say "✗ no token file for '$HOST' (missing or not a regular file, e.g. a directory). Expected: $TARGET"
+    say "The operator adds it. .env was not changed."; exit 2
 fi
 FW_REAL="$(readlink -f -- "$FRAMEWORK_ENV_DIR")" && [ "$(readlink -f -- "$TARGET")" = "$FW_REAL/.env-$HOST" ] \
     || fail "token file for '$HOST' resolves outside $FRAMEWORK_ENV_DIR. Nothing changed."
@@ -274,7 +291,7 @@ fi
 if [ -e "$DEST" ] && [ ! -L "$DEST" ] && [ ! -f "$DEST" ]; then
     fail "$DEST exists and is not a regular file or a symlink. Nothing changed."
 fi
-saved=""
+saved=""; MOVED=0
 if [ -f "$DEST" ] && [ ! -L "$DEST" ]; then
     # (c) a regular file may be an unsaved token: MOVE it (its bytes are not read) into the framework dir.
     stamp="${FAMILIARISE_NOW:-$(date +%Y%m%d-%H%M%S)}"
@@ -286,21 +303,49 @@ if [ -f "$DEST" ] && [ ! -L "$DEST" ]; then
         && fail "backup path $saved already exists. Nothing changed."
 fi
 
+# After the backup move, DEST is absent until the link lands. Every failure from then on says so.
+fail_post() {
+    if [ "$MOVED" = 1 ]; then
+        fail "$1 The previous .env token is at $saved; $DEST is now absent."
+    else
+        fail "$1 Nothing changed."
+    fi
+}
+on_signal() {
+    [ "$MOVED" = 1 ] && echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
+    exit 143
+}
+
 # Atomic link: create the link under a temp name beside DEST, then rename it over DEST.
 LINK_TMP="$SHARED_MEMORY_SKILL_DIR/.env.link.$$"
 trap 'rm -f -- "$LINK_TMP"' EXIT
-trap 'exit 143' TERM INT HUP
+trap on_signal TERM INT HUP
 if [ -n "$saved" ]; then
-    mv -T -- "$DEST" "$saved" || fail "could not move the current .env to $saved. Nothing changed."
-    chmod 600 -- "$saved" || fail "moved the current .env to $saved but could not set mode 600; check it."
+    # No-clobber move (a same-filesystem move reads no bytes; across devices mv copies them, so a failed
+    # move can leave a partial copy at $saved; the original is then still at DEST).
+    mv -n -T -- "$DEST" "$saved" \
+        || fail "could not move the current .env to $saved (a cross-device move copies bytes). Check $DEST and $saved."
+    if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+        fail "backup path appeared during the run; nothing changed. ($saved)"
+    fi
+    MOVED=1
+    { [ -f "$saved" ] && [ ! -L "$saved" ]; } \
+        || fail_post "backup $saved is not a regular file after the move."
+    chmod 600 -- "$saved" || fail_post "could not set mode 600 on $saved."
     say "saved the previous .env to $saved"
 fi
 rm -f -- "$LINK_TMP"
-ln -s -- "$TARGET" "$LINK_TMP" || fail "could not create a link in $SHARED_MEMORY_SKILL_DIR."
-mv -T -f -- "$LINK_TMP" "$DEST" || fail "could not replace $DEST with the link."
-trap - EXIT TERM INT HUP
-[ -L "$DEST" ] && [ "$(readlink -- "$DEST")" = "$TARGET" ] \
-    || fail "verification failed: $DEST does not point at $TARGET."
+ln -s -- "$TARGET" "$LINK_TMP" || fail_post "could not create a link in $SHARED_MEMORY_SKILL_DIR."
+if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
+    fail_post "$DEST became a regular file during the run; not replaced."
+fi
+mv -T -f -- "$LINK_TMP" "$DEST" || fail_post "could not replace $DEST with the link."
+if [ -L "$DEST" ] && [ "$(readlink -f -- "$DEST")" = "$(readlink -f -- "$TARGET")" ]; then
+    trap - EXIT TERM INT HUP
+else
+    [ -L "$DEST" ] && rm -f -- "$DEST"
+    fail_post "verification failed: $DEST does not resolve to $TARGET (bad link removed)."
+fi
 
 # --- report (never reads a token) ----------------------------------------------------------------
 say "framework: $HOST"

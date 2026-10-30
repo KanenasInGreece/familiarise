@@ -14,7 +14,7 @@ An agent's shared memory talks to one framework gateway, and each gateway needs 
 1. The tunnel script announces the open framework in `~/.config/shared-memory/active-framework`.
 2. You run `/familiarise`. The skill checks that the tunnel is alive and the gateway answers.
 3. It links the shared-memory skill's .env to that framework's token file (a symlink; no token is read or copied).
-4. If the current token matches no known framework, it is saved first as `.env-unsaved-<timestamp>`, so nothing is lost.
+4. If the current `.env` is a regular file (not a link), it is moved first to `.env-unsaved-<timestamp>`, so nothing is lost.
 
 The skill never opens tunnels, enters passwords or changes the gateway. The operator opens and closes tunnels and manages token files. Agents only check status.
 

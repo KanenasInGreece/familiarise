@@ -46,7 +46,12 @@ Requirements: Linux. Needs bash, ssh, curl and git.
      `FRAMEWORK_ENV_DIR/.env-unsaved-<YYYYmmdd-HHMMSS>`, mode 600, then linked. If that path exists, refused.
    - `.env` is absent: linked.
    The link is made under a temp name (`.env.link.<pid>`) and renamed over `.env`; the temp link is removed on
-   failure or kill. The skill directory must be writable. After linking, `readlink` must show the target.
+   failure or kill. The skill directory must be writable. After linking, the link is verified by resolution
+   (`readlink -f` of `.env` equals that of the target); a bad link is removed. The backup move is no-clobber.
+   Across devices `mv` copies the bytes, and a failed move can leave a partial copy at the backup path while
+   the original stays at `.env`. After the backup move `.env` is absent until the link lands: any failure or
+   kill then names the backup path (the token is there). `FRAMEWORK_ENV_DIR` must be absolute. Only one run
+   at a time (`flock` on `FRAMEWORK_ENV_DIR/.lock`).
    A rotated token needs no re-run: the link shows the new bytes.
 
 ## Exit codes
@@ -55,9 +60,12 @@ Requirements: Linux. Needs bash, ssh, curl and git.
 - `1`: any refusal or failure: config missing or incomplete, state file invalid, session ended, or gateway
   silent; token file is a symlink or resolves outside `FRAMEWORK_ENV_DIR`; the skill directory is not
   writable; `.env` is neither a regular file nor a symlink; backup path exists or the move failed; link
-  creation or rename failed; verification failed. On a refusal before the backup move, nothing changed.
+  creation or rename failed; verification failed; `FRAMEWORK_ENV_DIR` not absolute; another run holds the
+  lock. On a refusal before the backup move, nothing changed; after it, the message names the backup path.
   Report the message.
-- `2`: no token file for this framework. Nothing changed. The operator must add it.
+- `143`: killed by TERM, INT or HUP; the temp link is removed and the lock released. If the backup move had
+  happened, the message names the `.env-unsaved-` path (the token is there) and says `.env` is absent.
+- `2`: no token file for this framework (missing, or not a regular file, such as a directory). Nothing changed. The operator must add it.
 
 `--version` exits 0. `--update` exits 0 (up to date, or updated) or 1 (no git, no tags, network or clone
 failure, symlink or non-regular file in the tag or among the installed files, empty or malformed local VERSION, VERSION mismatch, backup or

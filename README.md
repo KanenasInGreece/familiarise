@@ -25,3 +25,7 @@ The skill never opens tunnels, enters passwords or changes the gateway. The oper
 | `ops/framework-tunnel.sh` | Tunnel script, source of truth |
 | `tests/` | Fake ssh and fake gateway for end-to-end tests |
 | `docs/` | Demo video |
+
+## Licence
+
+Zero-Clause BSD. See [LICENCE.md](LICENCE.md).

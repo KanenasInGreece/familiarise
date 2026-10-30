@@ -15,9 +15,11 @@ START='<!-- familiarise:constitution-snippet'  # prefix: matches any version
 END='<!-- /familiarise:constitution-snippet -->'
 SHARED='<!-- shared-memory:constitution-snippet'
 
+usage="usage: place_snippet.sh [--dry-run] <constitution-file>"
 dry_run=0
 if [ "${1:-}" = "--dry-run" ]; then dry_run=1; shift; fi
-TARGET="${1:?usage: place_snippet.sh [--dry-run] <constitution-file>}"
+if [ "$#" -ne 1 ] || [ -z "$1" ] || [ "${1#-}" != "$1" ]; then echo "$usage" >&2; exit 2; fi
+TARGET="$1"
 [ -f "$SNIPPET" ] || { echo "place_snippet: no snippet at $SNIPPET" >&2; exit 1; }
 
 block="$(awk -v s="$START" -v e="$END" 'index($0,s)==1{p=1} p{print} index($0,e)==1{p=0}' "$SNIPPET")"

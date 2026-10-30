@@ -44,14 +44,21 @@ if [ "$rc" -ne 0 ]; then
     exit 3
 fi
 
-if printf '%s\n' "$stripped" | grep -qF -- "$SHARED"; then
-    placed="above the shared-memory block"
-    out="$(printf '%s\n' "$stripped" | BLOCK="$block" awk -v sh="$SHARED" '
-        !done && index($0,sh)==1 { print ENVIRON["BLOCK"]; print ""; done=1 }
-        { print }')"
-else
+# One test places the block: the first line that is the shared-memory marker, optionally indented.
+# Not found (awk exit 4) falls back to the top, never to silent loss.
+placed="above the shared-memory block"
+rc=0
+out="$(BLOCK="$block" awk -v sh="$SHARED" '
+    function is_shared(l,   i) { i=index(l,sh); return i>0 && substr(l,1,i-1) ~ /^[ \t]*$/ }
+    !done && is_shared($0) { print ENVIRON["BLOCK"]; print ""; done=1 }
+    { print }
+    END { if (!done) exit 4 }' <<< "$stripped")" || rc=$?
+if [ "$rc" -eq 4 ]; then
     placed="at the top (no shared-memory block found)"
     out="$block"$'\n\n'"$stripped"
+elif [ "$rc" -ne 0 ]; then
+    echo "place_snippet: insertion failed (awk exit $rc), $TARGET not changed" >&2
+    exit 1
 fi
 
 if [ "$dry_run" -eq 1 ]; then

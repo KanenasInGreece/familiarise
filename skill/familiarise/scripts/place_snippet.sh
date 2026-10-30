@@ -75,5 +75,15 @@ if [ "$(printf '%s\n' "$out")" = "$current" ]; then
     exit 0
 fi
 
-printf '%s\n' "$out" > "$TARGET"
+# Write to a temp file beside the target, check it, then rename it over the target. A full disk or
+# a failed write leaves the original untouched. The target keeps its mode (a symlink is followed).
+real="$TARGET"
+[ -L "$TARGET" ] && real="$(readlink -f -- "$TARGET")"
+tmp="$(mktemp "$real.XXXXXX")" || { echo "place_snippet: cannot create a temp file beside $TARGET, not changed" >&2; exit 1; }
+trap 'rm -f -- "$tmp"' EXIT
+if [ -e "$real" ]; then chmod --reference="$real" -- "$tmp"; else chmod "$(printf '%o' $((0666 & ~$(umask))))" -- "$tmp"; fi \
+    || { echo "place_snippet: cannot set the mode on the temp file, $TARGET not changed" >&2; exit 1; }
+printf '%s\n' "$out" > "$tmp" && [ "$(cat -- "$tmp")" = "$out" ] \
+    || { echo "place_snippet: write failed, $TARGET not changed" >&2; exit 1; }
+mv -f -- "$tmp" "$real" || { echo "place_snippet: could not replace $TARGET, not changed" >&2; exit 1; }
 echo "place_snippet: block placed $placed in $TARGET"

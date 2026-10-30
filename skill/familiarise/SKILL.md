@@ -1,12 +1,12 @@
 ---
 name: familiarise
-description: Use when the user runs /familiarise, or asks to connect shared memory to the framework they opened a tunnel to, or to switch which framework shared memory uses. Copies that framework's token file into the shared-memory skill directory. Do not use for any other memory task.
+description: Use when the user runs /familiarise, or asks to connect shared memory to the framework they opened a tunnel to, or to switch which framework shared memory uses. Links the shared-memory skill's .env to that framework's token file. Do not use for any other memory task.
 ---
 
 # Familiarise
 
 This skill points the shared-memory skill at the framework whose tunnel is open. The tunnel
-announces itself in `~/.config/shared-memory/active-framework`. It only copies a token file. It does not open tunnels, enter passwords or change the gateway.
+announces itself in `~/.config/shared-memory/active-framework`. It only repoints a symlink; it never reads a token. It does not open tunnels, enter passwords or change the gateway.
 
 ## Run it
 
@@ -37,23 +37,27 @@ Requirements: Linux. Needs bash, ssh, curl and git.
    and removes it when the tunnel closes.
    - Absent: nothing is changed. Say so and stop.
 2. Checks that the session named in the file is still running and that `localhost:8888/health` answers.
-3. Copies `FRAMEWORK_ENV_DIR/.env-<framework>` over `SHARED_MEMORY_SKILL_DIR/.env`.
-   Before overwriting a different `.env`, it hashes that `.env` and looks the hash up in
-   `frameworks/.index` (mode 600, lines `<sha256>  .env-<host>`, whole-file SHA-256, no token text, written atomically on each copy).
-   A hit counts only if `.env-<host>` is a regular file (not a symlink), is not the same file as the shared-memory `.env` (`-ef`), and
-   its own whole-file SHA-256 equals the index hash; no other token file is read. If not (no hit, changed or missing file, no index, a symlinked index, or a token
-   that predates the index),
-   the current `.env` is saved first as `.env-unsaved-<timestamp>`.
-   The copy is written to a temp file beside the `.env` and renamed into place.
+3. Makes `SHARED_MEMORY_SKILL_DIR/.env` a symlink to `FRAMEWORK_ENV_DIR/.env-<framework>`. No token file is
+   read, copied or hashed, and no index is kept. The target must be a regular file (not a symlink) that
+   resolves to `FRAMEWORK_ENV_DIR/.env-<framework>`.
+   - `.env` already links to it: prints "already linked to <framework>", changes nothing.
+   - `.env` links elsewhere: the link is replaced.
+   - `.env` is a regular file (possibly an unsaved token): it is moved (not copied) to
+     `FRAMEWORK_ENV_DIR/.env-unsaved-<YYYYmmdd-HHMMSS>`, mode 600, then linked. If that path exists, refused.
+   - `.env` is absent: linked.
+   The link is made under a temp name (`.env.link.<pid>`) and renamed over `.env`; the temp link is removed on
+   failure or kill. The skill directory must be writable. After linking, `readlink` must show the target.
+   A rotated token needs no re-run: the link shows the new bytes.
 
 ## Exit codes
 
-- `0`: copied, or no framework session (nothing changed)
-- `1`: not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
-  or the existing `.env` could not be backed up (backup path exists, or the backup failed its check);
-  or the existing `.env` could not be hashed; or the shared-memory `.env` is a symlink ("shared-memory .env is a symlink; replace it with a regular file first. Nothing copied.").
-  Nothing is copied. (A failed copy or copy check also exits 1, after the backup.) Report the message.
-- `2`: no token file for this framework. Nothing was copied. The operator must add it.
+- `0`: linked, already linked, or no framework session (nothing changed)
+- `1`: any refusal or failure: config missing or incomplete, state file invalid, session ended, or gateway
+  silent; token file is a symlink or resolves outside `FRAMEWORK_ENV_DIR`; the skill directory is not
+  writable; `.env` is neither a regular file nor a symlink; backup path exists or the move failed; link
+  creation or rename failed; verification failed. On a refusal before the backup move, nothing changed.
+  Report the message.
+- `2`: no token file for this framework. Nothing changed. The operator must add it.
 
 `--version` exits 0. `--update` exits 0 (up to date, or updated) or 1 (no git, no tags, network or clone
 failure, symlink or non-regular file in the tag or among the installed files, empty or malformed local VERSION, VERSION mismatch, backup or
@@ -61,7 +65,7 @@ install failure; a failed install is rolled back from the backup, and VERSION is
 
 ## Rules
 
-- Never print, quote or summarise a token. The script prints the identity only.
+- Never print, quote or summarise a token. The script prints the framework name and gateway version only.
 - Never `source` a `.env`.
 - Do not edit the token files. The operator owns them.
 - Report the script's output as it is. If it failed, say why and what the user should do.

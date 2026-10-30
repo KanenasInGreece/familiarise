@@ -8,7 +8,7 @@
 #
 # Usage:
 #   familiarise.sh             point shared memory at the open framework (default)
-#   familiarise.sh --version   print "familiarise <version>" (VERSION file beside SKILL.md; 0.1.0 if absent)
+#   familiarise.sh --version   print "familiarise <version>" (VERSION file beside SKILL.md; 0.1.0 if the file is absent)
 #   familiarise.sh --update    install the newest tagged release (vX.Y.Z) from FAMILIARISE_REPO
 #                              (default https://github.com/KanenasInGreece/familiarise.git). Replaces only
 #                              SKILL.md, CONSTITUTION_SNIPPET.md, VERSION and scripts/*, after a verified
@@ -23,7 +23,8 @@
 #   2  no token file exists for this framework
 # Exit codes (--version): 0.
 # Exit codes (--update): 0 up to date or updated; 1 any failure (no git, no tags, network or clone
-#   failure, unsafe tag content such as a symlink, malformed local VERSION, VERSION mismatch, backup or
+#   failure, unsafe tag content such as a symlink (also as skill/ or skill/familiarise), a symlink among the
+#   installed files, malformed or empty local VERSION, VERSION mismatch, backup or
 #   install failure). On an install failure every replaced file is restored from the backup; VERSION is
 #   installed last, so a failed update never leaves a new VERSION over old files. If the rollback itself
 #   fails, the message says so and names the backup.
@@ -43,9 +44,12 @@ fail() { echo "familiarise: ✗ $*" >&2; exit "${2:-1}"; }
 
 # --- version and self-update (handled before the config block; no .env needed) ----------------------
 local_version() {
-    local v=""
-    [ -f "$SKILL_ROOT/VERSION" ] && v="$(head -n 1 "$SKILL_ROOT/VERSION" | tr -d '[:space:]')"
-    echo "${v:-0.1.0}"
+    # Missing VERSION file: 0.1.0. A present file is returned as is (empty is rejected by --update).
+    if [ -f "$SKILL_ROOT/VERSION" ]; then
+        head -n 1 "$SKILL_ROOT/VERSION" | tr -d '[:space:]'; echo
+    else
+        echo "0.1.0"
+    fi
 }
 
 # git with a 60 s limit when `timeout` exists.
@@ -73,7 +77,7 @@ do_update() {
         || fail "local VERSION '$local_v' is not X.Y.Z. Fix or remove the VERSION file. Nothing changed."
     tags="$(gitt ls-remote --tags --refs -- "$repo" 2>/dev/null)" \
         || fail "could not reach $repo. Nothing changed."
-    latest="$(printf '%s\n' "$tags" | sed -n 's|.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' | sort -V | tail -n 1)"
+    latest="$(printf '%s\n' "$tags" | sed -nE 's|^[0-9a-f]+[[:space:]]+refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)$|\1|p' | sort -V | tail -n 1)"
     [ -n "$latest" ] || fail "no release tags (vX.Y.Z) found at $repo. Nothing changed."
     printf '%s\n' "$latest" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
         || fail "unexpected tag name. Nothing changed."
@@ -91,6 +95,11 @@ do_update() {
         && git -C "$tmp/src" checkout -q FETCH_HEAD >/dev/null 2>&1; } \
         || fail "could not fetch tag $latest from $repo. Nothing changed."
     local src="$tmp/src/skill/familiarise"
+    # The clone's own parent directories must be real directories, not links out of the clone.
+    for f in "$tmp/src/skill" "$src"; do
+        { [ -d "$f" ] && [ ! -L "$f" ]; } \
+            || fail "tag $latest: ${f#"$tmp/src/"} is missing, not a directory, or a symlink. Nothing changed."
+    done
     # Every source must be a regular file, not a symlink (a link could pull in a local file).
     for f in SKILL.md CONSTITUTION_SNIPPET.md VERSION; do
         { [ -f "$src/$f" ] && [ ! -L "$src/$f" ]; } \
@@ -106,6 +115,11 @@ do_update() {
     [ "$(head -n 1 "$src/VERSION" | tr -d '[:space:]')" = "$remote_v" ] \
         || fail "tag $latest does not carry VERSION $remote_v. Nothing changed."
 
+    # Installed targets must not be symlinks (a backup would follow them).
+    [ -L "$SKILL_ROOT/scripts" ] && fail "$SKILL_ROOT/scripts is a symlink. Nothing changed."
+    for f in "$SKILL_ROOT/SKILL.md" "$SKILL_ROOT/CONSTITUTION_SNIPPET.md" "$SKILL_ROOT/VERSION" "$SKILL_ROOT"/scripts/*; do
+        [ -L "$f" ] && fail "installed ${f#"$SKILL_ROOT/"} is a symlink. Remove it first. Nothing changed."
+    done
     # Backup first, verified byte for byte.
     stamp="$(date +%Y%m%d-%H%M%S)"
     bdir="$SKILL_ROOT/.backup/$local_v-$stamp"

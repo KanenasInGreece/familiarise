@@ -76,7 +76,7 @@ gateway_ok() {
 }
 
 master_up() {
-    "$SSH" -S "$SOCK" -O check "$HOST" >/dev/null 2>&1
+    "$SSH" -S "${1:-$SOCK}" -O check "$HOST" >/dev/null 2>&1
 }
 
 pid_alive() {
@@ -85,22 +85,30 @@ pid_alive() {
 
 # The state file is written by the session. It holds the session script pid and the shell pid.
 read_state() {
-    S_HOST=""; S_MAIN=""; S_SHELL=""
+    S_HOST=""; S_MAIN=""; S_SHELL=""; S_SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
     [ -f "$STATE_FILE" ] || return 1
     while IFS='=' read -r key val; do
         case "$key" in
             HOST) S_HOST="$val" ;;
             MAIN_PID) S_MAIN="$val" ;;
             SHELL_PID) S_SHELL="$val" ;;
+            SOCK) S_SOCK="$val" ;;
         esac
     done < "$STATE_FILE"
     return 0
 }
 
-# Closes the ssh master, which closes the forward, and removes the state.
+# Closes the ssh master on socket $1 (default: this session's own), which closes the forward.
+close_master() {
+    local s="${1:-$SOCK}"
+    master_up "$s" && "$SSH" -S "$s" -O exit "$HOST" >/dev/null 2>&1
+    rm -f "$s"
+}
+
+# Closes the master named by the state (S_SOCK) and removes the state.
 close_tunnel() {
-    master_up && "$SSH" -S "$SOCK" -O exit "$HOST" >/dev/null 2>&1
-    rm -f "$SOCK" "$STATE_FILE"
+    close_master "${S_SOCK:-$SOCK}"
+    rm -f "$STATE_FILE"
 }
 
 # True if pid $1 is the session shell started by session script pid $2.
@@ -115,13 +123,15 @@ is_session_shell() {
     return 1
 }
 
-# Exit handler of a session: close the tunnel only if the state still belongs to this script.
-# A newer session's state and socket must never be removed by an older session's handler.
+# Exit handler of a session. Every session has its own ssh socket ($SOCK, ssh-<port>-<pid>.sock), so it
+# always closes that one master and never a socket another session made. The shared state file is
+# removed only if it is missing or names this session.
 own_cleanup() {
+    close_master "$SOCK"
     if read_state && [ "$S_MAIN" != "$$" ]; then
         return 0
     fi
-    close_tunnel
+    rm -f "$STATE_FILE"
 }
 
 do_status() {
@@ -223,6 +233,7 @@ release_lock() {
 }
 
 do_start() {
+    SOCK="$STATE_DIR/ssh-$LOCAL_PORT-$$.sock"          # this session's own socket
     mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
     if ! acquire_lock; then
         echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
@@ -263,12 +274,12 @@ do_start() {
     done
     if ! gateway_ok; then
         echo "✗ the tunnel is up, but the gateway on localhost:$LOCAL_PORT does not answer /health" >&2
-        close_tunnel
+        close_master "$SOCK"
         exit 1
     fi
 
     local rc="$STATE_DIR/session-rc.$$"
-    printf 'HOST=%s\nMAIN_PID=%s\n' "$HOST" "$$" > "$STATE_FILE"
+    printf 'HOST=%s\nMAIN_PID=%s\nSOCK=%s\n' "$HOST" "$$" "$SOCK" > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
     release_lock
     # The session shell records its own pid, so `stop` can end it.

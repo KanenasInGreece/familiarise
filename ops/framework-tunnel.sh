@@ -43,6 +43,18 @@ case "$ACTION" in
     *) usage ;;
 esac
 
+# Test overrides must never reach the real state dir: if any is set, a scratch FRAMEWORK_TUNNEL_STATE_DIR is required.
+if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TUNNEL_REMOTE_PORT:-}${FRAMEWORK_TUNNEL_STATE_DIR:-}" ]; then
+    if [ -z "${FRAMEWORK_TUNNEL_STATE_DIR:-}" ]; then
+        echo "✗ a test override is set, so FRAMEWORK_TUNNEL_STATE_DIR must be set to a scratch folder too." >&2
+        exit 1
+    fi
+    if [ "$(realpath -m -- "$STATE_DIR")" = "$(realpath -m -- "$HOME/.config/shared-memory")" ]; then
+        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir ($HOME/.config/shared-memory)." >&2
+        exit 1
+    fi
+fi
+
 # start and stop are operator-only: they need a terminal on stdin. status is open to everyone (agents).
 # This guards against accidents (an agent running stop by mistake). It is not authentication.
 if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then

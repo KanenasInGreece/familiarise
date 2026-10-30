@@ -36,6 +36,8 @@
 # 143  killed by TERM/INT/HUP at any point after the trap is set (before the config, the health check and any change):
 #      the temp link is removed and the lock released. If the backup move had completed, stderr says the
 #      token is at the .env-unsaved path and DEST is absent. A signal during the move is acted on after it.
+#      If the move was cut short, stderr says the token is still in DEST and a partial copy may be at the
+#      .env-unsaved path. A signal after the link has landed prints neither message.
 # After the backup move, DEST is absent until the link lands: any failure then names the backup path.
 # The backup move is no-clobber (mv -n). Across devices mv copies the bytes, and a failed move can leave
 # a partial copy at the backup path while the original stays at DEST (that message names both).
@@ -43,7 +45,8 @@
 # FRAMEWORK_ENV_DIR must be an absolute path (exit 1 otherwise). The link is verified by resolution
 # (readlink -f of DEST equals that of the target); a bad link is removed.
 # Exit codes (--version): 0.
-# Exit codes (--update): 0 up to date or updated; 143 killed by TERM, INT or HUP; 1 any other failure (no git, no tags, network or clone
+# Exit codes (--update): 0 up to date or updated; 143 killed by TERM, INT or HUP (a signal during the install
+#   is not rolled back: rerun --update to reinstall); 1 any other failure (no git, no tags, network or clone
 #   failure, unsafe tag content such as a symlink (also as skill/ or skill/familiarise), a symlink among the
 #   installed files, malformed or empty local VERSION, VERSION mismatch, backup or
 #   install failure). On an install failure every replaced file is restored from the backup; VERSION is
@@ -70,8 +73,9 @@ saved=""; MOVED=0; DEST=""
 on_signal() {
     if [ -n "$saved" ] && [ -f "$saved" ] && [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
         echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
-    elif [ -n "$saved" ] && [ -e "$saved" ] && [ -e "$DEST" ]; then
+    elif [ -n "$saved" ] && [ -e "$saved" ] && [ -f "$DEST" ] && [ ! -L "$DEST" ]; then
         # A move interrupted across devices can leave a partial copy at $saved; DEST still holds the token.
+        # A link in DEST means the link has landed and the token is no longer there: no message.
         echo "familiarise: ✗ killed during the backup move. The token is still in $DEST; a partial copy may be at $saved." >&2
     fi
     exit 143

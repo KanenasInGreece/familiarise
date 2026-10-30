@@ -213,13 +213,28 @@ acquire_lock() {
         LOCK_KIND=flock
         return 0
     fi
-    if ! mkdir "$LOCK.d" 2>/dev/null; then
-        local owner
+    local tries=0 owner stale
+    while ! mkdir "$LOCK.d" 2>/dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -le 5 ] || return 1
         owner="$(cat "$LOCK.d/pid" 2>/dev/null)"
-        pid_alive "$owner" && return 1
-        rm -rf "$LOCK.d"            # owner is gone: stale lock
-        mkdir "$LOCK.d" 2>/dev/null || return 1
-    fi
+        if [ -z "$owner" ]; then
+            # The holder may be between mkdir and writing its pid: held, unless the dir is old.
+            [ $(( $(date +%s) - $(stat -c %Y "$LOCK.d" 2>/dev/null || echo 0) )) -lt 5 ] && return 1
+        elif pid_alive "$owner"; then
+            return 1
+        fi
+        # Stale: take it by atomic rename, so only one contender wins. If what we moved is not the
+        # stale lock we judged (a new holder got in first), put it back and report busy.
+        stale="$LOCK.stale.$$"
+        if mv "$LOCK.d" "$stale" 2>/dev/null; then
+            if [ "$(cat "$stale/pid" 2>/dev/null)" != "$owner" ]; then
+                mv "$stale" "$LOCK.d" 2>/dev/null || rm -rf "$stale"
+                return 1
+            fi
+            rm -rf "$stale"
+        fi
+    done
     echo "$$" > "$LOCK.d/pid"
     LOCK_KIND=mkdir
 }
@@ -227,7 +242,7 @@ acquire_lock() {
 release_lock() {
     case "$LOCK_KIND" in
         flock) exec 9>&- ;;
-        mkdir) rm -rf "$LOCK.d" ;;
+        mkdir) [ "$(cat "$LOCK.d/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK.d" ;;
     esac
     LOCK_KIND=""
 }
@@ -235,11 +250,14 @@ release_lock() {
 do_start() {
     SOCK="$STATE_DIR/ssh-$LOCAL_PORT-$$.sock"          # this session's own socket
     mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
+    # Release the lock, and close this session's own master if ssh got that far, on every way out,
+    # signals included (bash runs a trap after the foreground command ends; the EXIT trap runs after `exit 1`).
+    trap 'release_lock; own_cleanup' EXIT
+    trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
         echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
         exit 1
     fi
-    trap release_lock EXIT
     if read_state; then
         if pid_alive "$S_MAIN"; then
             echo "✗ a tunnel to '$S_HOST' is already open (session pid $S_MAIN)." >&2

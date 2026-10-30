@@ -50,10 +50,14 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
         exit 1
     fi
     # Compare resolved real paths against the passwd home, not $HOME, so HOME=/other cannot hide it.
-    REAL_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
-    if [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "${REAL_HOME:-$HOME}/.config/shared-memory")" ] ||
+    REAL_HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+    if [ -z "$REAL_HOME" ]; then
+        echo "✗ cannot resolve the passwd home directory (getent returned nothing), so the real-state-dir guard cannot be checked. Refusing." >&2
+        exit 1
+    fi
+    if [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "$REAL_HOME/.config/shared-memory")" ] ||
        [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "$HOME/.config/shared-memory")" ]; then
-        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir (${REAL_HOME:-$HOME}/.config/shared-memory)." >&2
+        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir ($REAL_HOME/.config/shared-memory)." >&2
         exit 1
     fi
 fi
@@ -250,7 +254,7 @@ do_start() {
     trap 'release_lock; own_cleanup' EXIT
     trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
-        echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
+        echo "✗ another '$NAME start' is in progress (it holds $LOCK.d). Wait for it, or finish its ssh prompt." >&2
         exit 1
     fi
     if read_state; then

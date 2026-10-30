@@ -166,5 +166,18 @@ PATH="$SHIM_CURL:$PATH" run beta; rc=$?
 [ "$rc" = 143 ] && [ "$(readlink "$D")" = "$before" ] && [ "$(unsaved)" = 0 ]
 check "q: INT before the health check exits 143 and changes nothing" $?
 
+# r: a move cut short leaves a partial copy at the backup path while DEST still holds the token.
+SHIM_PART="$S/shim-part"; mkdir -p "$SHIM_PART"
+cat > "$SHIM_PART/mv" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" -n "*) printf 'part' > "\${@: -1}"; kill -TERM \$PPID; exit 0 ;; esac
+exec "$REAL_MV" "\$@"
+EOF
+chmod +x "$SHIM_PART/mv"
+rm -f "$D"; printf 'partial-token\n' > "$D"; rm -f "$FW"/.env-unsaved-*
+PATH="$SHIM_PART:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && grep -q 'killed during the backup move. The token is still in' "$S/out" && [ "$(cat "$D")" = "partial-token" ]
+check "r: TERM during a cut-short move reports that the token is still in DEST" $?
+
 [ "$FAIL" = 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$FAIL"

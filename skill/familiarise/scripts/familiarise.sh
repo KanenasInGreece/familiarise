@@ -43,7 +43,7 @@
 # FRAMEWORK_ENV_DIR must be an absolute path (exit 1 otherwise). The link is verified by resolution
 # (readlink -f of DEST equals that of the target); a bad link is removed.
 # Exit codes (--version): 0.
-# Exit codes (--update): 0 up to date or updated; 1 any failure (no git, no tags, network or clone
+# Exit codes (--update): 0 up to date or updated; 143 killed by TERM, INT or HUP; 1 any other failure (no git, no tags, network or clone
 #   failure, unsafe tag content such as a symlink (also as skill/ or skill/familiarise), a symlink among the
 #   installed files, malformed or empty local VERSION, VERSION mismatch, backup or
 #   install failure). On an install failure every replaced file is restored from the backup; VERSION is
@@ -70,6 +70,9 @@ saved=""; MOVED=0; DEST=""
 on_signal() {
     if [ -n "$saved" ] && [ -f "$saved" ] && [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
         echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
+    elif [ -n "$saved" ] && [ -e "$saved" ] && [ -e "$DEST" ]; then
+        # A move interrupted across devices can leave a partial copy at $saved; DEST still holds the token.
+        echo "familiarise: ✗ killed during the backup move. The token is still in $DEST; a partial copy may be at $saved." >&2
     fi
     exit 143
 }

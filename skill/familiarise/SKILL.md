@@ -40,10 +40,11 @@ Requirements: Linux. Needs bash, ssh, curl and git.
 3. Copies `FRAMEWORK_ENV_DIR/.env-<framework>` over `SHARED_MEMORY_SKILL_DIR/.env`.
    Before overwriting a different `.env`, it hashes that `.env` and looks the hash up in
    `frameworks/.index` (mode 600, lines `<sha256>  .env-<host>`, whole-file SHA-256, no token text, written atomically on each copy).
-   A hit counts only if `.env-<host>` is a regular file (not a symlink) whose own whole-file SHA-256 equals the
-   index hash; no other token file is read. If not (no hit, changed or missing file, no index, a symlinked index, or a token
+   A hit counts only if `.env-<host>` is a regular file (not a symlink), is not the same file as the shared-memory `.env` (`-ef`), and
+   its own whole-file SHA-256 equals the index hash; no other token file is read. If not (no hit, changed or missing file, no index, a symlinked index, or a token
    that predates the index),
    the current `.env` is saved first as `.env-unsaved-<timestamp>`.
+   The copy is written to a temp file beside the `.env` and renamed into place.
 
 ## Exit codes
 

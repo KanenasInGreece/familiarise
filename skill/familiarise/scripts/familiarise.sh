@@ -9,8 +9,9 @@
 # Fingerprint index: FRAMEWORK_ENV_DIR/.index (mode 600) holds one line per copied token,
 # "<sha256-hex>  .env-<host>" (whole-file SHA-256 only, no token text; lines of any other shape are
 # ignored). Before overwriting a differing .env, that .env is hashed and looked up. A hit counts only if
-# .env-<host> is a regular file (not a symlink) whose own whole-file SHA-256 equals the index hash; that
-# named file is the only other token file ever read. Otherwise (no hit, stale, changed or missing file, no
+# .env-<host> is a regular file (not a symlink), is not the same file as the shared-memory .env (-ef), and
+# its own whole-file SHA-256 equals the index hash; that named file is the only other token file ever read.
+# The copy is written to a temp file beside the .env and renamed into place. Otherwise (no hit, stale, changed or missing file, no
 # index, a symlinked index, or a token that predates the index) the current .env is backed up first as
 # .env-unsaved-<timestamp>. The index is replaced atomically.
 #
@@ -289,11 +290,14 @@ fi
 
 # Atomic copy: temp file beside DEST (mode 600 from creation), verified, then renamed over DEST.
 # DEST is never written in place, so a hard link to a token file is replaced, not overwritten.
+trap 'rm -f -- "${dest_tmp:-}"' EXIT
+trap 'exit 143' TERM INT HUP
 dest_tmp="$(umask 077; mktemp "$SHARED_MEMORY_SKILL_DIR/.env.tmp.XXXXXX" 2>/dev/null)" \
     || fail "could not create a temporary file in $SHARED_MEMORY_SKILL_DIR. Nothing copied."
 { cp -- "$SRC" "$dest_tmp" && chmod 600 "$dest_tmp" && cmp -s "$SRC" "$dest_tmp"; } 2>/dev/null \
     || { rm -f -- "$dest_tmp"; fail "could not copy $SRC to $DEST (copy verification failed)"; }
 mv -T -f -- "$dest_tmp" "$DEST" || { rm -f -- "$dest_tmp"; fail "could not replace $DEST"; }
+dest_tmp=""; trap - EXIT TERM INT HUP
 
 # --- fingerprint index: "<sha256>  .env-<host>", hashes only, one line per host, replaced atomically ---
 src_hash="$(hash_of "$SRC")"

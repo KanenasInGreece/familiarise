@@ -141,7 +141,7 @@ check "j1: DEST symlink to .env-alpha: exit 1, .env-alpha unchanged, nothing cop
 rm -f "$SM/.env"
 
 # j2. DEST is a hard link of .env-alpha (indexed): back up first, .env-alpha keeps its bytes
-reset; run alpha; rm -f "$SM/.env"; ln "$FW/.env-alpha" "$SM/.env"
+reset; cp "$FW/.env-alpha" "$S/alpha.copy"; run alpha; rm -f "$SM/.env"; ln "$FW/.env-alpha" "$SM/.env"
 run beta; rc=$?
 b="$(find "$FW" -maxdepth 1 -name '.env-unsaved-*' | head -1)"
 [ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && [ -n "$b" ] && cmp -s "$b" "$S/alpha.copy" && cmp -s "$FW/.env-alpha" "$S/alpha.copy" \
@@ -153,6 +153,15 @@ reset; run alpha; run beta; rc=$?
 [ "$rc" = 0 ] && [ -f "$SM/.env" ] && [ ! -L "$SM/.env" ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(mode "$SM/.env")" = 600 ] \
   && [ "$(find "$SM" -maxdepth 1 -name '.env.tmp.*' | wc -l)" = 0 ]
 check "j3: switch leaves a regular 600 .env with the new bytes and no temp files" $?
+
+# j4. script killed (SIGTERM) right after mktemp: no .env.tmp.* left behind
+reset; run alpha; rm -f "$SM/.env"
+KS="$S/killshim"; mkdir -p "$KS"
+printf '#!/bin/sh\ncase "$*" in *.env.tmp.*) kill -TERM "$PPID"; exit 1;; esac\nexec "%s" "$@"\n' "$(command -v cmp)" > "$KS/cmp"; chmod +x "$KS/cmp"
+printf 'HOST=%s\nMAIN_PID=%s\n' beta "$$" > "$ST/active-framework"
+PATH="$KS:$PATH" bash "$INST/scripts/familiarise.sh" >"$S/out" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(find "$SM" -maxdepth 1 -name '.env.tmp.*' | wc -l)" = 0 ] && [ ! -e "$SM/.env" ]
+check "j4: SIGTERM after mktemp leaves no .env.tmp.* file" $?
 
 # f. existing tests
 for t in "$REPO"/tests/test_*.sh; do

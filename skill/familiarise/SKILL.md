@@ -31,7 +31,7 @@ familiarise: gateway:   localhost:8888 answers, version 1.0.39
 |---|---|---|
 | 0 | Linked, or already linked to that framework | The framework name and the gateway line. If the output says `saved the previous .env to <path>`, also give that path: the user's unsaved token is there. |
 | 0 | No tunnel open (no state file). Nothing changed | Open the tunnel with `~/framework-tunnel.sh <host>`, then run this again. |
-| 1 | Refused or failed | The message as printed. Only the message `The previous .env token is at <path>; .env is now absent` means the token is at that path. Any other message means `.env` still holds the token, or nothing changed: do not name a backup path as the token's location. |
+| 1 | Refused or failed | The message as printed. Only a message starting `The previous .env token is at <path>` means the token is at that path. Any other message means `.env` still holds the token, or nothing changed: do not name a backup path as the token's location. |
 | 2 | No token file for this framework. Nothing changed | The operator must add `frameworks/.env-<framework>`. |
 | 143 | Killed by a signal. The temp link is removed | The message as printed, including any "token is at" path. |
 
@@ -55,4 +55,4 @@ The script header holds the mechanics: the state file, the link and its verifica
 
 Settings come from a `.env` beside this file (the skill's own config, not the shared-memory link). `--update` needs none.
 
-Requirements: Linux, with bash, ssh, curl, git, `flock` (util-linux) and GNU coreutils (`readlink -f`, `mv -T`, `mv -n`).
+Requirements: Linux, with bash, curl, git, `cmp` (diffutils), `flock` (util-linux) and GNU coreutils (`readlink -f`, `mv -T`, `mv -n`, `sort -V`).

@@ -34,10 +34,11 @@ current=""
 # another START first) aborts with exit 3 and nothing is written. A lone END line is kept.
 rc=0
 stripped="$(awk -v s="$START" -v e="$END" '
-    index($0,s)==1 {
+    function at_start(l, sub_,   i) { i=index(l,sub_); return i>0 && substr(l,1,i-1) ~ /^[ \t]*$/ }
+    at_start($0,s) {
         if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; exit 3 }
         skip=1; startline=NR; next }
-    skip { if (index($0,e)==1) { skip=0; after=1 }; next }
+    skip { if (at_start($0,e)) { skip=0; after=1 }; next }
     after && $0=="" { after=0; next }
     { after=0; print }
     END { if (skip) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?

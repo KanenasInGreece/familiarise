@@ -177,8 +177,9 @@ do_stop() {
             sleep 0.25
         done
         if pid_alive "$S_SHELL" && is_session_shell "$S_SHELL" "$S_MAIN"; then
-            echo "✗ the session shell (pid $S_SHELL) is still running. Not closing the tunnel." >&2
-            echo "  End what is running in it, or exit it, then run stop again. State left in $STATE_FILE." >&2
+            echo "! the session shell (pid $S_SHELL) is busy. The close is requested and still pending." >&2
+            echo "  The tunnel stays up until the running command ends; then the shell exits and the tunnel closes by itself." >&2
+            echo "  State stays in $STATE_FILE until then. Do not run stop again; check with: $NAME $HOST status" >&2
             exit 1
         fi
     elif pid_alive "$S_MAIN"; then

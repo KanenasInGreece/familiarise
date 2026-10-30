@@ -30,7 +30,7 @@ mkrepo good 0.2.0 0.2.0; mkrepo mism 0.9.0 0.3.0; mkrepo notag 0.2.0 ""
 
 # a. --version from repo copy
 out="$(bash "$REPO/skill/familiarise/scripts/familiarise.sh" --version)"; rc=$?
-[ "$rc" = 0 ] && [ "$out" = "familiarise 0.2.0" ]; check "a: --version" $?
+[ "$rc" = 0 ] && [ "$out" = "familiarise $(cat "$REPO/skill/familiarise/VERSION")" ]; check "a: --version" $?
 
 # b. update 0.1.0 -> 0.2.0
 I="$S/inst"; mkinst "$I"

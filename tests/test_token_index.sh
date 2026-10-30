@@ -19,7 +19,14 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s -m 1 "http://localhost:$PORT/health" >
 INST="$S/inst"; SM="$S/sm"; FW="$INST/frameworks"; ST="$S/state"
 mkdir -p "$INST" "$SM/scripts" "$ST"
 cp -r "$REPO/skill/familiarise/." "$INST/"
+[ -n "${OLD_SCRIPT:-}" ] && cp "$OLD_SCRIPT" "$INST/scripts/familiarise.sh"   # run the cases against another script
 touch "$SM/scripts/memory_bridge.py"
+# PATH shims: log every argument list, then exec the real tool.
+SH="$S/shims"; CALLS="$S/calls.log"; mkdir -p "$SH"; : > "$CALLS"
+for t in cmp sha256sum grep awk sed cat cp head tail stat; do
+    real="$(command -v "$t")"
+    printf '#!/bin/sh\necho "%s $*" >> "%s"\nexec "%s" "$@"\n' "$t" "$CALLS" "$real" > "$SH/$t"; chmod +x "$SH/$t"
+done
 printf 'SHARED_MEMORY_SKILL_DIR=%s\nFRAMEWORK_ENV_DIR=%s\n' "$SM" "$FW" > "$S/config.env"
 mkdir -p "$FW"; chmod 700 "$FW"
 for h in alpha beta gamma; do
@@ -27,14 +34,17 @@ for h in alpha beta gamma; do
 done
 export FAMILIARISE_ENV="$S/config.env" FRAMEWORK_TUNNEL_STATE_DIR="$ST" FRAMEWORK_TUNNEL_LOCAL_PORT="$PORT"
 run() { printf 'HOST=%s\nMAIN_PID=%s\n' "$1" "$$" > "$ST/active-framework"
-        bash "$INST/scripts/familiarise.sh" >"$S/out" 2>&1; }
+        PATH="$SH:$PATH" bash "$INST/scripts/familiarise.sh" >"$S/out" 2>&1; }
+reset() { rm -f "$SM/.env" "$FW/.index" "$FW"/.env-unsaved-*; rm -rf "$FW/.index"
+          for h in alpha beta gamma; do printf 'AGENT_ID=agent-%s\nTOKEN=sekret-token-%s-value\n' "$h" "$h" > "$FW/.env-$h"; chmod 600 "$FW/.env-$h"; done; }
 unsaved() { find "$FW" -maxdepth 1 -name '.env-unsaved-*' | wc -l; }
 mode() { stat -c %a "$1"; }
 
 # a. first connect
 run alpha; rc=$?
 [ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-alpha" \
-  && [ "$(cat "$FW/.index")" = "$(sha256sum "$FW/.env-alpha" | cut -d' ' -f1)  .env-alpha" ] \
+  && [ "$(awk '{print $1"  "$2}' "$FW/.index")" = "$(sha256sum < "$FW/.env-alpha" | cut -d' ' -f1)  .env-alpha" ] \
+  && grep -qE '^[0-9a-f]{64}  \.env-alpha  [0-9]+  [0-9.]+$' "$FW/.index" \
   && [ "$(mode "$FW/.index")" = 600 ] && [ "$(mode "$FW")" = 700 ] \
   && ! grep -q 'sekret' "$FW/.index" && ! grep -q 'sekret' "$S/out" && [ "$(unsaved)" = 0 ]
 check "a: first connect copies, writes .index (hash only, mode 600)" $?
@@ -42,7 +52,7 @@ check "a: first connect copies, writes .index (hash only, mode 600)" $?
 # b. switch to a second framework: no backup
 run beta; rc=$?
 [ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(unsaved)" = 0 ] \
-  && [ "$(wc -l < "$FW/.index")" = 2 ] && grep -q '  \.env-alpha$' "$FW/.index" && grep -q '  \.env-beta$' "$FW/.index"
+  && [ "$(wc -l < "$FW/.index")" = 2 ] && grep -q '  \.env-alpha  ' "$FW/.index" && grep -q '  \.env-beta  ' "$FW/.index"
 check "b: switch to beta, current .env is in the index, no .env-unsaved" $?
 
 # c. foreign .env matching nothing in the index
@@ -61,18 +71,57 @@ run alpha; rc=$?
 check "c2: no index: differing .env is backed up, index recreated" $?
 rm -f "$FW"/.env-unsaved-*
 
-# d. an unrelated token file is never opened
-run alpha   # make sure DEST is alpha and indexed
-chmod 000 "$FW/.env-gamma"
+# d. an unrelated token file is never opened (observed through PATH shims, not inferred from success)
+reset; run alpha
+# .env-aaa sorts before .env-alpha, so the old glob scan would reach it first
+printf 'AGENT_ID=agent-aaa\nTOKEN=sekret-token-aaa-value\n' > "$FW/.env-aaa"; chmod 000 "$FW/.env-aaa"; : > "$CALLS"
 run beta; rc=$?
-chmod 600 "$FW/.env-gamma"
-[ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(unsaved)" = 0 ]
-check "d: connect succeeds with an unreadable unrelated token file" $?
+chmod 600 "$FW/.env-aaa"
+[ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(unsaved)" = 0 ] \
+  && [ -s "$CALLS" ] && ! grep -q 'env-aaa' "$CALLS"; r=$?; rm -f "$FW/.env-aaa"; (exit $r)
+check "d: unrelated token file never named in any tool call (and connect succeeds)" $?
 
 # e. no temp files left, index mode 600
 left="$(find "$FW" -maxdepth 1 -name '.index.tmp.*' | wc -l)"
 [ "$left" = 0 ] && [ "$(mode "$FW/.index")" = 600 ]
 check "e: no leftover index temp files" $?
+
+# g. stale entry: indexed token file deleted, token lives only in .env
+reset; run alpha; cp "$SM/.env" "$S/old.copy"; rm -f "$FW/.env-alpha"
+run beta; rc=$?
+b="$(find "$FW" -maxdepth 1 -name '.env-unsaved-*' | head -1)"
+[ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && [ -n "$b" ] && cmp -s "$b" "$S/old.copy" && cmp -s "$SM/.env" "$FW/.env-beta"
+check "g: deleted .env-alpha: old token is backed up" $?
+
+# g2. rotation: .env-alpha rewritten with different bytes after indexing
+reset; run alpha; cp "$SM/.env" "$S/old.copy"
+printf 'AGENT_ID=agent-alpha\nTOKEN=rotated-longer-token-value-xxxxxxxx\n' > "$FW/.env-alpha"
+run beta; rc=$?
+b="$(find "$FW" -maxdepth 1 -name '.env-unsaved-*' | head -1)"
+[ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && [ -n "$b" ] && cmp -s "$b" "$S/old.copy"
+check "g2: rotated .env-alpha (size changed): old token is backed up" $?
+
+# g3. same-size rewrite is caught by mtime
+reset; run alpha; cp "$SM/.env" "$S/old.copy"
+sleep 0.05; printf 'AGENT_ID=agent-alpha\nTOKEN=sekret-token-ALPHA-value\n' > "$FW/.env-alpha"
+run beta; rc=$?
+[ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && cmp -s "$(find "$FW" -maxdepth 1 -name '.env-unsaved-*')" "$S/old.copy"
+check "g3: same-size rewrite (mtime changed): old token is backed up" $?
+
+# h. symlinked .index is not followed and is replaced by a regular file
+reset; ln -s .env-beta "$FW/.index"
+run alpha; rc=$?
+[ "$rc" = 0 ] && [ -f "$FW/.index" ] && [ ! -L "$FW/.index" ] && ! grep -q 'sekret' "$FW/.index" \
+  && [ "$(wc -l < "$FW/.index")" = 1 ] && [ "$(mode "$FW/.env-beta")" = 600 ] && grep -q 'TOKEN=sekret-token-beta-value' "$FW/.env-beta"
+check "h: symlinked .index becomes a regular file with no token text" $?
+
+# i. backslash in the .env path: hash is parsed correctly, a matching switch does not back up
+reset; SM_SAVE="$SM"; SM="$S/s\\m"; mkdir -p "$SM/scripts"; touch "$SM/scripts/memory_bridge.py"
+printf 'SHARED_MEMORY_SKILL_DIR=%s\nFRAMEWORK_ENV_DIR=%s\n' "$SM" "$FW" > "$S/config.env"
+run alpha; run beta; rc=$?
+[ "$rc" = 0 ] && [ "$(unsaved)" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta"
+check "i: backslash in SHARED_MEMORY_SKILL_DIR: indexed switch makes no backup" $?
+SM="$SM_SAVE"; printf 'SHARED_MEMORY_SKILL_DIR=%s\nFRAMEWORK_ENV_DIR=%s\n' "$SM" "$FW" > "$S/config.env"
 
 # f. existing tests
 for t in "$REPO"/tests/test_*.sh; do

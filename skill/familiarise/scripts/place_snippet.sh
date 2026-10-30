@@ -77,6 +77,7 @@ fi
 
 # Write to a temp file beside the target, check it, then rename it over the target. A full disk or
 # a failed write leaves the original untouched. The target keeps its mode (a symlink is followed).
+# The rename breaks a hardlink to the constitution file: the other link keeps the old text.
 real="$TARGET"
 [ -L "$TARGET" ] && real="$(readlink -f -- "$TARGET")"
 tmp="$(mktemp "$real.XXXXXX")" || { echo "place_snippet: cannot create a temp file beside $TARGET, not changed" >&2; exit 1; }

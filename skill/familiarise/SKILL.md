@@ -29,11 +29,11 @@ familiarise: gateway:   localhost:8888 answers, version 1.0.39
 
 | Exit | Situation | Tell the user |
 |---|---|---|
-| 0 | Linked, or already linked to that framework | The framework name and the gateway line. |
+| 0 | Linked, or already linked to that framework | The framework name and the gateway line. If the output says `saved the previous .env to <path>`, also give that path: the user's unsaved token is there. |
 | 0 | No tunnel open (no state file). Nothing changed | Open the tunnel with `~/framework-tunnel.sh <host>`, then run this again. |
-| 1 | Refused or failed. Nothing changed, or the message names a backup path | The message as printed. If it names a `.env-unsaved-` path, the token is there. |
+| 1 | Refused or failed | The message as printed. Only the message `The previous .env token is at <path>; .env is now absent` means the token is at that path. Any other message means `.env` still holds the token, or nothing changed: do not name a backup path as the token's location. |
 | 2 | No token file for this framework. Nothing changed | The operator must add `frameworks/.env-<framework>`. |
-| 143 | Killed by a signal. The temp link is removed | The message as printed. |
+| 143 | Killed by a signal. The temp link is removed | The message as printed, including any "token is at" path. |
 
 ## Rules
 
@@ -47,10 +47,12 @@ familiarise: gateway:   localhost:8888 answers, version 1.0.39
 bash <this-skill-dir>/scripts/familiarise.sh --update
 ```
 
-Installs the newest `vX.Y.Z` tag of the repo. It backs up the current files to `.backup/` and verifies the backup, then replaces only `SKILL.md`, `VERSION` and `scripts/*`. A failed install is rolled back. It never touches `.env`, `frameworks/` or `~/framework-tunnel.sh`, which `scripts/sync_local.sh` updates in the source repo. Exit 0 means up to date or updated. Exit 1 means the message says why; report it.
+Installs the newest `vX.Y.Z` tag of the repo. It backs up the current files to `.backup/` and verifies the backup, then replaces only `SKILL.md`, `VERSION` and `scripts/*`. A failed install is rolled back. It never touches `.env` (the shared-memory link), `frameworks/` or `~/framework-tunnel.sh`. The tunnel script is installed from the repo by `scripts/sync_local.sh`, which runs only in the operator's local checkout. Exit 0 means up to date or updated. Exit 1 means the message says why; report it.
 
 ## Design detail
 
 The script header holds the mechanics: the state file, the link and its verification, the lock, the backup move, and every exit code. Read it when debugging. You do not need it to run the skill.
 
-Requirements: Linux, with bash, ssh, curl and git.
+Settings come from a `.env` beside this file (the skill's own config, not the shared-memory link). `--update` needs none.
+
+Requirements: Linux, with bash, ssh, curl, git, `flock` (util-linux) and GNU coreutils (`readlink -f`, `mv -T`, `mv -n`).

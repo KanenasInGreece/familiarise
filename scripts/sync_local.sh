@@ -22,6 +22,10 @@ CLIENTS=(
 )
 
 dry=0
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--dry-run" ]; }; then
+    echo "usage: sync_local.sh [--dry-run]" >&2
+    exit 2
+fi
 if [ "${1:-}" = "--dry-run" ]; then dry=1; fi
 
 run() { if [ "$dry" -eq 1 ]; then echo "  would: $*"; else "$@"; fi; }
@@ -51,9 +55,12 @@ for entry in "${CLIENTS[@]}"; do
     elif [ "$dry" -eq 1 ]; then
         echo "  would create .env (shared memory $sm)"
     else
-        sed -e "s|^SHARED_MEMORY_SKILL_DIR=.*|SHARED_MEMORY_SKILL_DIR=$sm|" \
-            -e "s|^FRAMEWORK_ENV_DIR=.*|FRAMEWORK_ENV_DIR=$dst/frameworks|" \
-            "$SRC/.env.example" > "$dst/.env"
+        # Fixed template, values passed through ENVIRON: any character in a path is safe (|, &, \).
+        ( umask 077
+          SM_DIR="$sm" FW_DIR="$dst/frameworks" awk '
+            /^SHARED_MEMORY_SKILL_DIR=/ { print "SHARED_MEMORY_SKILL_DIR=" ENVIRON["SM_DIR"]; next }
+            /^FRAMEWORK_ENV_DIR=/       { print "FRAMEWORK_ENV_DIR=" ENVIRON["FW_DIR"]; next }
+            { print }' "$SRC/.env.example" > "$dst/.env" )
         chmod 600 "$dst/.env"
         echo "  .env created (shared memory $sm)"
     fi

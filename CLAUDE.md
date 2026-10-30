@@ -7,7 +7,7 @@
 1. Token files never enter git, chat or output. Print identity and gateway version only. Never source a `.env`.
 2. Each agent has its own `frameworks/`. Tokens are never shared between agents.
 3. Never overwrite a token by accident. An unmatched `.env` is saved as `.env-unsaved-<timestamp>` first.
-4. `~/framework-tunnel.sh` is edited in place, outside this repo. Do not copy it in.
+4. `ops/framework-tunnel.sh` is the source of truth. `~/framework-tunnel.sh` is installed from it by `scripts/sync_local.sh`; never edit the home file. `start` and `stop` are operator-only (they refuse without a terminal on stdin; a guard against accidents, not authentication). Agents use `status` only.
 5. The gateway sets identity from the token. Never guess `AGENT_NAME` locally.
 6. Ask the operator before anything destructive or outward-facing: token files, installs into agent folders, pushes, system packages.
 7. Verify each step before the next. Scripts are idempotent.
@@ -17,11 +17,11 @@
 
 | Part | Location |
 |---|---|
-| Tunnel script (not in repo) | `~/framework-tunnel.sh` |
+| Tunnel script (source of truth) | `ops/framework-tunnel.sh`, installed to `~/framework-tunnel.sh` by `scripts/sync_local.sh` (see `ops/README.md`) |
 | Skill source | `skill/familiarise/` |
 | Skill installed per agent | `~/.claude/skills/familiarise/`, `~/.gemini/config/skills/familiarise/` |
 | Token files (operator-managed) | `<agent skills dir>/familiarise/frameworks/.env-<host>` |
-| Sync to local agents | `scripts/sync_local.sh [--dry-run]` (local to this folder; later replaced by `--update` from the repo) |
+| Sync | `scripts/sync_local.sh [--dry-run]`: skill to each agent, tunnel script to home (backup, atomic mv) |
 | Test doubles | `tests/fake_ssh.sh`, `tests/fake_gateway.py` |
 
 ## Roles and cooperation
@@ -75,5 +75,4 @@ Never use port 8888 or `~/.config/shared-memory` in a test.
 - Gemini has no token yet. Its `frameworks/` is empty.
 - Operator: decide whether to drop the `AGENT_NAME` mismatch warning in `familiarise.sh` and the `AGENT_NAME` line in the Claude `.env`.
 - Operator: place the familiarise block in `~/.gemini/GEMINI.md` (needs confirmation).
-- Review findings still open: tunnel script `stop` pid check, the start lock, and the trap comment (`~/framework-tunnel.sh`, outside the repo).
 - Real ssh password prompt and the live workstation gateway are untested.

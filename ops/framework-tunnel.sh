@@ -63,7 +63,6 @@ if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then
 fi
 
 SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
-mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
 
 port_busy() {
     ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${LOCAL_PORT}\$"
@@ -220,6 +219,7 @@ release_lock() {
 }
 
 do_start() {
+    mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
     if ! acquire_lock; then
         echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
         exit 1

@@ -44,7 +44,7 @@ mode() { stat -c %a "$1"; }
 run alpha; rc=$?
 [ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-alpha" \
   && [ "$(awk '{print $1"  "$2}' "$FW/.index")" = "$(sha256sum < "$FW/.env-alpha" | cut -d' ' -f1)  .env-alpha" ] \
-  && grep -qE '^[0-9a-f]{64}  \.env-alpha  [0-9]+  [0-9.]+$' "$FW/.index" \
+  && grep -qE '^[0-9a-f]{64}  \.env-alpha$' "$FW/.index" \
   && [ "$(mode "$FW/.index")" = 600 ] && [ "$(mode "$FW")" = 700 ] \
   && ! grep -q 'sekret' "$FW/.index" && ! grep -q 'sekret' "$S/out" && [ "$(unsaved)" = 0 ]
 check "a: first connect copies, writes .index (hash only, mode 600)" $?
@@ -52,7 +52,7 @@ check "a: first connect copies, writes .index (hash only, mode 600)" $?
 # b. switch to a second framework: no backup
 run beta; rc=$?
 [ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(unsaved)" = 0 ] \
-  && [ "$(wc -l < "$FW/.index")" = 2 ] && grep -q '  \.env-alpha  ' "$FW/.index" && grep -q '  \.env-beta  ' "$FW/.index"
+  && [ "$(wc -l < "$FW/.index")" = 2 ] && grep -q '  \.env-alpha$' "$FW/.index" && grep -q '  \.env-beta$' "$FW/.index"
 check "b: switch to beta, current .env is in the index, no .env-unsaved" $?
 
 # c. foreign .env matching nothing in the index
@@ -101,12 +101,22 @@ b="$(find "$FW" -maxdepth 1 -name '.env-unsaved-*' | head -1)"
 [ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && [ -n "$b" ] && cmp -s "$b" "$S/old.copy"
 check "g2: rotated .env-alpha (size changed): old token is backed up" $?
 
-# g3. same-size rewrite is caught by mtime
+# g3. same-size rewrite, different bytes: caught by the hash
 reset; run alpha; cp "$SM/.env" "$S/old.copy"
 sleep 0.05; printf 'AGENT_ID=agent-alpha\nTOKEN=sekret-token-ALPHA-value\n' > "$FW/.env-alpha"
 run beta; rc=$?
 [ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && cmp -s "$(find "$FW" -maxdepth 1 -name '.env-unsaved-*')" "$S/old.copy"
-check "g3: same-size rewrite (mtime changed): old token is backed up" $?
+check "g3: same-size rewrite (different bytes): old token is backed up" $?
+
+# g4. different bytes, mtime restored with touch -r: still backed up (mtime is not used)
+reset; run alpha; cp "$SM/.env" "$S/old.copy"
+cp -p "$FW/.env-alpha" "$S/mtime.ref"
+printf 'AGENT_ID=agent-alpha\nTOKEN=sekret-token-ALPHA-value\n' > "$FW/.env-alpha"; touch -r "$S/mtime.ref" "$FW/.env-alpha"
+[ "$(stat -c %Y.%y "$FW/.env-alpha")" = "$(stat -c %Y.%y "$S/mtime.ref")" ] && [ "$(stat -c %s "$FW/.env-alpha")" = "$(stat -c %s "$S/old.copy")" ]
+mt=$?
+run beta; rc=$?
+[ "$mt" = 0 ] && [ "$rc" = 0 ] && [ "$(unsaved)" = 1 ] && cmp -s "$(find "$FW" -maxdepth 1 -name '.env-unsaved-*')" "$S/old.copy"
+check "g4: different bytes, same size and restored mtime (touch -r): old token is backed up" $?
 
 # h. symlinked .index is not followed and is replaced by a regular file
 reset; ln -s .env-beta "$FW/.index"

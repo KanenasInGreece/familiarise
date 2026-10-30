@@ -7,10 +7,12 @@
 # check passes.
 #
 # Fingerprint index: FRAMEWORK_ENV_DIR/.index (mode 600) holds one line per copied token,
-# "<sha256-hex>  .env-<host>  <size>  <mtime>" (hash and stat metadata only, no token text). Before overwriting a differing .env, only that .env is hashed
-# and looked up; no other token file's contents are read. A hit counts only if .env-<host> still exists
-# with the recorded size and mtime (stat only). Otherwise (no hit, stale or missing file, no index, a
-# symlinked index, or a token that predates the index) the current .env is backed up first as .env-unsaved-<timestamp>. The index is replaced atomically.
+# "<sha256-hex>  .env-<host>" (whole-file SHA-256 only, no token text; lines of any other shape are
+# ignored). Before overwriting a differing .env, that .env is hashed and looked up. A hit counts only if
+# .env-<host> is a regular file (not a symlink) whose own whole-file SHA-256 equals the index hash; that
+# named file is the only other token file ever read. Otherwise (no hit, stale, changed or missing file, no
+# index, a symlinked index, or a token that predates the index) the current .env is backed up first as
+# .env-unsaved-<timestamp>. The index is replaced atomically.
 #
 # Usage:
 #   familiarise.sh             point shared memory at the open framework (default)
@@ -257,16 +259,16 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
     matched=0
     dest_hash="$(hash_of "$DEST")"
     [ -n "$dest_hash" ] || fail "could not hash the current .env. Nothing copied."
-    # A hit counts only if the named framework file still exists with the recorded size and mtime
-    # (stat metadata, never contents); otherwise the token may live nowhere else, so back it up.
+    # A hit counts only if the named framework file is a regular file whose whole-file sha256 equals the
+    # index hash (only that one file is hashed); otherwise the token may live nowhere else, so back it up.
     if [ -f "$INDEX" ] && [ ! -L "$INDEX" ]; then
-        while read -r _h _n _sz _mt; do
+        while read -r _h _n; do
             [ "$_h" = "$dest_hash" ] || continue
             _f="$FRAMEWORK_ENV_DIR/$_n"
-            if [ -f "$_f" ] && [ ! -L "$_f" ] && [ "$(stat -c '%s %.9Y' -- "$_f" 2>/dev/null)" = "$_sz $_mt" ]; then
+            if [ -f "$_f" ] && [ ! -L "$_f" ] && [ "$(hash_of "$_f")" = "$_h" ]; then
                 matched=1; break
             fi
-        done < <(awk 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/' "$INDEX" 2>/dev/null)
+        done < <(awk 'NF==2 && length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/' "$INDEX" 2>/dev/null)
     fi
     if [ "$matched" -eq 0 ]; then
         saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$(date +%Y%m%d-%H%M%S)"
@@ -288,16 +290,15 @@ cmp -s "$SRC" "$DEST" || fail "copy verification failed"
 
 # --- fingerprint index: "<sha256>  .env-<host>", hashes only, one line per host, replaced atomically ---
 src_hash="$(hash_of "$SRC")"
-src_meta="$(stat -c '%s %.9Y' -- "$SRC" 2>/dev/null)"
 idx_tmp=""
-[ -n "$src_hash" ] && [ -n "$src_meta" ] && idx_tmp="$(umask 077; mktemp "$FRAMEWORK_ENV_DIR/.index.tmp.XXXXXX" 2>/dev/null)"
+[ -n "$src_hash" ] && idx_tmp="$(umask 077; mktemp "$FRAMEWORK_ENV_DIR/.index.tmp.XXXXXX" 2>/dev/null)"
 if [ -n "$idx_tmp" ]; then
     {
         # A symlinked .index is ignored (never followed). Keep only well-formed lines of other hosts.
         if [ -f "$INDEX" ] && [ ! -L "$INDEX" ]; then
-            awk -v t=".env-$HOST" 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/ && $2 != t { print $1 "  " $2 "  " $3 "  " $4 }' "$INDEX"
+            awk -v t=".env-$HOST" 'NF==2 && length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $2 != t { print $1 "  " $2 }' "$INDEX"
         fi
-        printf '%s  .env-%s  %s\n' "$src_hash" "$HOST" "${src_meta// /  }"
+        printf '%s  .env-%s\n' "$src_hash" "$HOST"
     } > "$idx_tmp" 2>/dev/null \
         && chmod 600 "$idx_tmp" && mv -T -f -- "$idx_tmp" "$INDEX" \
         || { rm -f -- "$idx_tmp"; say "warning: could not update the fingerprint index $INDEX"; }

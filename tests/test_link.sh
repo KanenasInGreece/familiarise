@@ -136,5 +136,62 @@ check "n: relative FRAMEWORK_ENV_DIR exits 1, nothing changed" $?
 mkdir "$FW/.env-dirhost"; run dirhost; rc=$?
 [ "$rc" = 2 ] && [ "$(readlink "$D")" = "$before" ]; check "o: directory target exits 2, DEST unchanged" $?
 
+# Signal tests. Shims stand in for mv and curl and send the signal from inside the real run.
+SHIM_MV="$S/shim-mv"; SHIM_CURL="$S/shim-curl"; mkdir -p "$SHIM_MV" "$SHIM_CURL"
+REAL_MV="$(command -v mv)"
+# p: TERM right after the backup move (mv -n). The move completes, then the trap runs.
+cat > "$SHIM_MV/mv" <<EOF
+#!/usr/bin/env bash
+"$REAL_MV" "\$@" || exit \$?
+case " \$* " in *" -n "*) kill -TERM \$PPID ;; esac
+EOF
+chmod +x "$SHIM_MV/mv"
+rm -f "$D"; printf 'parent-unsaved\n' > "$D"; rm -f "$FW"/.env-unsaved-*
+PATH="$SHIM_MV:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && grep -q 'The previous .env token is at' "$S/out" && [ "$(unsaved)" = 1 ] && [ ! -e "$D" ] && [ ! -L "$D" ]
+check "p: TERM right after the backup move exits 143 and reports where the token is" $?
+
+# q: INT during the health check, before any trap was installed in the old script. Nothing changes.
+ln -sfn "$FW/.env-beta" "$D"; before="$(readlink "$D")"; rm -f "$FW"/.env-unsaved-*
+cat > "$SHIM_CURL/curl" <<'EOF'
+#!/usr/bin/env bash
+p=$PPID
+while [ -n "$p" ] && [ "$p" -gt 1 ] && ! tr '\0' ' ' < "/proc/$p/cmdline" | grep -q 'familiarise.sh'; do
+    p="$(awk '{print $4}' "/proc/$p/stat")"
+done
+kill -INT "$p"; exit 7
+EOF
+chmod +x "$SHIM_CURL/curl"
+PATH="$SHIM_CURL:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && [ "$(readlink "$D")" = "$before" ] && [ "$(unsaved)" = 0 ]
+check "q: INT before the health check exits 143 and changes nothing" $?
+
+# r: a move cut short leaves a partial copy at the backup path while DEST still holds the token.
+SHIM_PART="$S/shim-part"; mkdir -p "$SHIM_PART"
+cat > "$SHIM_PART/mv" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" -n "*) printf 'part' > "\${@: -1}"; kill -TERM \$PPID; exit 0 ;; esac
+exec "$REAL_MV" "\$@"
+EOF
+chmod +x "$SHIM_PART/mv"
+rm -f "$D"; printf 'partial-token\n' > "$D"; rm -f "$FW"/.env-unsaved-*
+PATH="$SHIM_PART:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && grep -q 'killed during the backup move. The token is still in' "$S/out" && [ "$(cat "$D")" = "partial-token" ]
+check "r: TERM during a cut-short move reports that the token is still in DEST" $?
+
+# s: TERM right after the link rename lands. The token has left DEST, so the handler must not warn
+# that it is still there.
+SHIM_LINK="$S/shim-link"; mkdir -p "$SHIM_LINK"
+cat > "$SHIM_LINK/mv" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" -f "*) "$REAL_MV" "\$@" || exit \$?; kill -TERM \$PPID ;; *) exec "$REAL_MV" "\$@" ;; esac
+EOF
+chmod +x "$SHIM_LINK/mv"
+rm -f "$D"; printf 'link-token\n' > "$D"; rm -f "$FW"/.env-unsaved-*
+PATH="$SHIM_LINK:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && [ -L "$D" ] && [ "$(readlink "$D")" = "$FW/.env-beta" ] && ! grep -q 'killed' "$S/out" \
+  && [ "$(unsaved)" = 1 ]
+check "s: TERM after the link has landed exits 143 with no 'token is still in DEST' warning" $?
+
 [ "$FAIL" = 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$FAIL"

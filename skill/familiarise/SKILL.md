@@ -47,7 +47,7 @@ familiarise: gateway:   localhost:8888 answers, version 1.0.39
 bash <this-skill-dir>/scripts/familiarise.sh --update
 ```
 
-Installs the newest `vX.Y.Z` tag of the repo. It backs up the current files to `.backup/` and verifies the backup, then replaces only `SKILL.md`, `VERSION` and `scripts/*`. A failed install is rolled back. It never touches `.env` (the shared-memory link), `frameworks/` or `~/framework-tunnel.sh`. The tunnel script is installed from the repo by `scripts/sync_local.sh`, which runs only in the operator's local checkout. Exit 0 means up to date or updated. Exit 1 means the message says why; report it.
+Installs the newest `vX.Y.Z` tag of the repo. It backs up the current files to `.backup/` and verifies the backup, then replaces only `SKILL.md`, `VERSION` and `scripts/*`. A failed install is rolled back. It never touches `.env` (the shared-memory link), `frameworks/` or `~/framework-tunnel.sh`. The tunnel script is installed from the repo by `scripts/sync_local.sh`, which runs only in the operator's local checkout. Exit 0 means up to date or updated. Exit 1 means the message says why; report it. Exit 143 means a signal stopped the update. A signal during the install is not rolled back, so the files can be mixed until you run `--update` again, which backs up and installs the release again.
 
 ## Design detail
 

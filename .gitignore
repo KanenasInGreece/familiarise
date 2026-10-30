@@ -10,3 +10,6 @@ __pycache__/
 
 # Top-level scripts/ is local to this folder (sync_local.sh), not part of the skill.
 /scripts/
+
+# Project instructions stay local.
+CLAUDE.md

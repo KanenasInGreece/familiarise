@@ -1,0 +1,9 @@
+# Secrets and per-agent state never enter git.
+.env
+.env.*
+!.env.example
+frameworks/
+*.unsaved-*
+.env-unsaved-*
+__pycache__/
+*.pyc

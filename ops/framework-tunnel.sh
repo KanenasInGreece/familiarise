@@ -13,7 +13,8 @@
 #
 # Opening: ssh asks for passphrases or passwords in this terminal, by hand. Then the tunnel is
 # announced in ~/.config/shared-memory/active-framework (any agent can read it) and a session
-# shell starts. Exiting that shell, or `stop`, closes the tunnel and removes the file.
+# shell starts. Exiting that shell closes the tunnel and removes the file. `stop` does the same
+# by ending that shell, which HUPs it and loses any unsaved work there.
 #
 # Test overrides (leave unset in normal use): FRAMEWORK_TUNNEL_SSH, FRAMEWORK_TUNNEL_LOCAL_PORT,
 # FRAMEWORK_TUNNEL_REMOTE_PORT, FRAMEWORK_TUNNEL_STATE_DIR.
@@ -163,7 +164,8 @@ do_status() {
 }
 
 # Ask the session shell to exit, which closes the tunnel and removes the state. Exits 1 if
-# the shell is busy (the close stays pending) or its pid cannot be trusted.
+# the shell is busy (the close stays pending), its pid cannot be trusted, or the open tunnel
+# is to another host. Exits 0 with "no tunnel open" when none is open.
 do_stop() {
     if ! read_state; then
         echo "no tunnel open"

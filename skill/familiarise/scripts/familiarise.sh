@@ -119,8 +119,9 @@ install_one() {
 
 # Install the newest tagged release over this skill, or report it is up to date. Exits.
 # Order: validate the tag content, back up, install SKILL.md and scripts/*, VERSION last,
-#   rolling back every replaced file from the backup if any install fails.
-# Globals: SKILL_ROOT (read), FAMILIARISE_REPO (optional).
+#   rolling back every replaced file if any install fails (restored from the backup, or deleted if it was new).
+# Globals: SKILL_ROOT (read), FAMILIARISE_REPO (optional), GIT_TERMINAL_PROMPT (exported, set to 0).
+#   Sets the EXIT trap to remove the clone dir, which replaces any EXIT trap set before this call.
 # Outputs: progress on stdout, failures on stderr via fail.
 # Returns: never; exits 0 (done or up to date) or 1 (see the header).
 do_update() {

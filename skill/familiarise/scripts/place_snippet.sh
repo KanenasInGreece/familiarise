@@ -34,13 +34,14 @@ current=""
 # another START first) aborts with exit 3 and nothing is written. A lone END line is kept.
 rc=0
 stripped="$(awk -v s="$START" -v e="$END" '
-    index($0,s)==1 {
-        if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; exit 3 }
+    function at_start(l, sub_,   i) { i=index(l,sub_); return i>0 && substr(l,1,i-1) ~ /^[ \t]*$/ }
+    at_start($0,s) {
+        if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; failed=1; exit 3 }
         skip=1; startline=NR; next }
-    skip { if (index($0,e)==1) { skip=0; after=1 }; next }
+    skip { if (at_start($0,e)) { skip=0; after=1 }; next }
     after && $0=="" { after=0; next }
     { after=0; print }
-    END { if (skip) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?
+    END { if (skip && !failed) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "place_snippet: $TARGET not changed (unterminated or nested familiarise block; fix it by hand)" >&2
     exit 3
@@ -74,5 +75,15 @@ if [ "$(printf '%s\n' "$out")" = "$current" ]; then
     exit 0
 fi
 
-printf '%s\n' "$out" > "$TARGET"
+# Write to a temp file beside the target, check it, then rename it over the target. A full disk or
+# a failed write leaves the original untouched. The target keeps its mode (a symlink is followed).
+real="$TARGET"
+[ -L "$TARGET" ] && real="$(readlink -f -- "$TARGET")"
+tmp="$(mktemp "$real.XXXXXX")" || { echo "place_snippet: cannot create a temp file beside $TARGET, not changed" >&2; exit 1; }
+trap 'rm -f -- "$tmp"' EXIT
+if [ -e "$real" ]; then chmod --reference="$real" -- "$tmp"; else chmod "$(printf '%o' $((0666 & ~$(umask))))" -- "$tmp"; fi \
+    || { echo "place_snippet: cannot set the mode on the temp file, $TARGET not changed" >&2; exit 1; }
+printf '%s\n' "$out" > "$tmp" && [ "$(cat -- "$tmp")" = "$out" ] \
+    || { echo "place_snippet: write failed, $TARGET not changed" >&2; exit 1; }
+mv -f -- "$tmp" "$real" || { echo "place_snippet: could not replace $TARGET, not changed" >&2; exit 1; }
 echo "place_snippet: block placed $placed in $TARGET"

@@ -83,6 +83,9 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
     done
     if [ "$matched" -eq 0 ]; then
         saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$(date +%Y%m%d-%H%M%S)"
+        # Never write through an existing path (a directory or symlink would receive the token copy).
+        { [ -e "$saved" ] || [ -L "$saved" ]; } \
+            && fail "backup path $saved already exists. Nothing copied."
         # Backup first, mode 600 from the start, verified byte for byte. Any failure stops here,
         # before the overwrite, so the unmatched token is never lost.
         ( umask 077; cp -- "$DEST" "$saved" ) 2>/dev/null \

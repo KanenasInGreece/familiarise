@@ -199,7 +199,9 @@ rm -f "$rc"
 trap 'exit 0' HUP
 EOF
     trap "close_tunnel; rm -f '$rc'" EXIT
-    # Ctrl-C goes to the session shell, not the script. HUP and TERM to the script end the session.
+    # While the session shell runs, bash waits for it, so a HUP or TERM sent to this script is only
+    # handled after the shell exits; it then exits with status 1 (the EXIT trap closes the tunnel).
+    # Ctrl-C is ignored here, so it goes to the session shell only.
     trap : INT
     trap 'exit 1' HUP TERM
 

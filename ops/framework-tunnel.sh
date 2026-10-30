@@ -79,6 +79,18 @@ close_tunnel() {
     rm -f "$SOCK" "$STATE_FILE"
 }
 
+# True if pid $1 is the session shell started by session script pid $2.
+is_session_shell() {
+    local pid="$1" main="$2" ppid cmd
+    ppid="$(awk '/^PPid:/ {print $2}' "/proc/$pid/status" 2>/dev/null)"
+    [ "$ppid" = "$main" ] || return 1
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    case "$cmd" in
+        *"--rcfile $STATE_DIR/session-rc.$main -i"*) return 0 ;;
+    esac
+    return 1
+}
+
 do_status() {
     if ! read_state; then
         echo "tunnel: DOWN (no session open)"
@@ -109,7 +121,20 @@ do_stop() {
         echo "✗ the open tunnel is to '$S_HOST', not '$HOST'" >&2
         exit 1
     fi
-    if pid_alive "$S_SHELL"; then
+    if [ -n "$S_SHELL" ]; then
+        # Only signal a pid that is still this session's shell: the session script must be alive,
+        # and the pid must be its child, started as `bash --rcfile <state dir>/session-rc.<main pid> -i`.
+        # After a crash the pid may have been reused by an unrelated process.
+        if ! pid_alive "$S_MAIN"; then
+            echo "✗ session pid $S_MAIN is gone, so shell pid $S_SHELL cannot be trusted. Not signalling it." >&2
+            echo "  State left in $STATE_FILE. Run: $NAME $HOST start (clears stale state), or remove it by hand." >&2
+            exit 1
+        fi
+        if ! is_session_shell "$S_SHELL" "$S_MAIN"; then
+            echo "✗ pid $S_SHELL is not the session shell of pid $S_MAIN. Not signalling it." >&2
+            echo "  State left in $STATE_FILE for you to inspect." >&2
+            exit 1
+        fi
         # HUP ends an interactive bash. Its exit lets the session script close the tunnel.
         kill -HUP "$S_SHELL" 2>/dev/null
         for _ in $(seq 1 40); do

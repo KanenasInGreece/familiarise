@@ -17,6 +17,20 @@ bash <this-skill-dir>/scripts/familiarise.sh
 `<this-skill-dir>` is the directory that contains this file. The script reads its settings from
 `.env` beside this file.
 
+```bash
+bash <this-skill-dir>/scripts/familiarise.sh --version   # prints "familiarise <version>"
+bash <this-skill-dir>/scripts/familiarise.sh --update    # install the newest tagged release
+```
+
+`--update` needs no `.env`. It reads the newest `vX.Y.Z` tag of `FAMILIARISE_REPO` (default
+`https://github.com/KanenasInGreece/familiarise.git`), never downgrades, backs up to
+`.backup/<version>-<timestamp>/` (verified), then replaces only `SKILL.md`, `CONSTITUTION_SNIPPET.md`,
+`VERSION` and `scripts/*`. It never touches `.env` or `frameworks/`, nor `~/framework-tunnel.sh`
+(use `scripts/sync_local.sh` for that). Without a `VERSION` file the version is `0.1.0`; a `VERSION`
+that is empty or not `X.Y.Z` is an error.
+
+Requirements: Linux. Needs bash, ssh, curl and git.
+
 ## What it does
 
 1. Reads `~/.config/shared-memory/active-framework`. The tunnel script writes it while the tunnel is open,
@@ -33,6 +47,10 @@ bash <this-skill-dir>/scripts/familiarise.sh
   or the existing `.env` could not be backed up (backup path exists, or the backup failed its check).
   Nothing is copied. (A failed copy or copy check also exits 1, after the backup.) Report the message.
 - `2`: no token file for this framework. Nothing was copied. The operator must add it.
+
+`--version` exits 0. `--update` exits 0 (up to date, or updated) or 1 (no git, no tags, network or clone
+failure, symlink or non-regular file in the tag or among the installed files, empty or malformed local VERSION, VERSION mismatch, backup or
+install failure; a failed install is rolled back from the backup, and VERSION is installed last). An unknown argument exits 1.
 
 ## Rules
 

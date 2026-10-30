@@ -6,6 +6,9 @@
 #   framework-tunnel.sh <host> stop      close the tunnel (run from another terminal)
 #   framework-tunnel.sh <host> status    report whether the tunnel to <host> is up
 #
+# start and stop refuse unless stdin is a terminal (operator-only; a guard against accidents, not
+# authentication). status works from anywhere.
+#
 # <host> is an ssh alias from ~/.ssh/config. The tunnel is localhost:8888 -> <host>:localhost:8888.
 #
 # Opening: ssh asks for passphrases or passwords in this terminal, by hand. Then the tunnel is
@@ -39,6 +42,13 @@ case "$ACTION" in
     start|stop|status) ;;
     *) usage ;;
 esac
+
+# start and stop are operator-only: they need a terminal on stdin. status is open to everyone (agents).
+# This guards against accidents (an agent running stop by mistake). It is not authentication.
+if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then
+    echo "✗ $ACTION is operator-only: run it from your own terminal." >&2
+    exit 1
+fi
 
 SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
 mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"

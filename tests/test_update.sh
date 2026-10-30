@@ -86,8 +86,9 @@ chmod 555 "$H/scripts"  # no temp file can be created beside scripts/familiarise
 before="$(snap "$H")"
 out="$(upd good2 "$H")"; rc=$?; echo "$out"
 [ "$rc" = 1 ] && [ "$(cat "$H/VERSION")" = "0.1.0" ] && [ "$(cat "$H/SKILL.md")" = "old skill" ] \
-  && [ "$before" = "$(snap "$H")" ] && ! ls "$H"/scripts/.familiarise-new.* >/dev/null 2>&1
-check "h: install failure rolls back, VERSION unchanged" $?
+  && [ "$before" = "$(snap "$H")" ] && ! ls "$H"/scripts/.familiarise-new.* >/dev/null 2>&1 \
+  && echo "$out" | grep -q "earlier changes were rolled back"
+check "h: install failure rolls back, VERSION unchanged, message says rolled back" $?
 chmod 755 "$H/scripts"
 sleep 1  # backup dir name has 1 s resolution
 upd good2 "$H" >/dev/null; rc=$?

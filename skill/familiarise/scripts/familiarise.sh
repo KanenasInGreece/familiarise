@@ -163,20 +163,21 @@ do_update() {
     # failure restore all of them (from the backup, or delete if it did not exist before).
     local -a done_rel=()
     local failed="" i
+    # A file is recorded only after its install succeeds: a failed install leaves its target unchanged,
+    # so restoring it would write into the same directory that just refused the install.
     for rel in SKILL.md; do
-        done_rel+=("$rel")
         install_one "$src/$rel" "$SKILL_ROOT/$rel" || { failed="$rel"; break; }
+        done_rel+=("$rel")
     done
     if [ -z "$failed" ]; then
         for f in "$src"/scripts/*; do
             [ -e "$f" ] || continue
             rel="scripts/$(basename -- "$f")"
-            done_rel+=("$rel")
             install_one "$f" "$SKILL_ROOT/$rel" || { failed="$rel"; break; }
+            done_rel+=("$rel")
         done
     fi
     if [ -z "$failed" ]; then
-        done_rel+=("VERSION")
         install_one "$src/VERSION" "$SKILL_ROOT/VERSION" || failed="VERSION"
     fi
     if [ -n "$failed" ]; then

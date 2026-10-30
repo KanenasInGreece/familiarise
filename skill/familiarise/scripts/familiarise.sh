@@ -21,7 +21,7 @@
 #   familiarise.sh --version   print "familiarise <version>" (VERSION file beside SKILL.md; 0.1.0 if the file is absent)
 #   familiarise.sh --update    install the newest tagged release (vX.Y.Z) from FAMILIARISE_REPO
 #                              (default https://github.com/KanenasInGreece/familiarise.git). Replaces only
-#                              SKILL.md, CONSTITUTION_SNIPPET.md, VERSION and scripts/*, after a verified
+#                              SKILL.md, VERSION and scripts/*, after a verified
 #                              backup in .backup/<version>-<timestamp>/. Never touches .env or frameworks/.
 #                              Never downgrades. Does not touch ~/framework-tunnel.sh (use sync_local.sh).
 #
@@ -121,7 +121,7 @@ do_update() {
             || fail "tag $latest: ${f#"$tmp/src/"} is missing, not a directory, or a symlink. Nothing changed."
     done
     # Every source must be a regular file, not a symlink (a link could pull in a local file).
-    for f in SKILL.md CONSTITUTION_SNIPPET.md VERSION; do
+    for f in SKILL.md VERSION; do
         { [ -f "$src/$f" ] && [ ! -L "$src/$f" ]; } \
             || fail "tag $latest: $f is missing or not a regular file. Nothing changed."
     done
@@ -137,7 +137,7 @@ do_update() {
 
     # Installed targets must not be symlinks (a backup would follow them).
     [ -L "$SKILL_ROOT/scripts" ] && fail "$SKILL_ROOT/scripts is a symlink. Nothing changed."
-    for f in "$SKILL_ROOT/SKILL.md" "$SKILL_ROOT/CONSTITUTION_SNIPPET.md" "$SKILL_ROOT/VERSION" "$SKILL_ROOT"/scripts/*; do
+    for f in "$SKILL_ROOT/SKILL.md" "$SKILL_ROOT/VERSION" "$SKILL_ROOT"/scripts/*; do
         [ -L "$f" ] && fail "installed ${f#"$SKILL_ROOT/"} is a symlink. Remove it first. Nothing changed."
     done
     # Backup first, verified byte for byte.
@@ -147,7 +147,7 @@ do_update() {
     ( umask 077; mkdir -p -- "$SKILL_ROOT/.backup" "$bdir/scripts" ) \
         && chmod 700 "$SKILL_ROOT/.backup" "$bdir" "$bdir/scripts" \
         || fail "could not create backup dir $bdir. Nothing changed."
-    for f in SKILL.md CONSTITUTION_SNIPPET.md VERSION; do
+    for f in SKILL.md VERSION; do
         [ -f "$SKILL_ROOT/$f" ] || continue
         cp -p -- "$SKILL_ROOT/$f" "$bdir/$f" && cmp -s "$SKILL_ROOT/$f" "$bdir/$f" \
             || fail "backup of $f failed verification ($bdir). Nothing changed."
@@ -159,11 +159,11 @@ do_update() {
             || fail "backup of scripts/$base failed verification ($bdir). Nothing changed."
     done
 
-    # Install SKILL.md, snippet and scripts first, VERSION last. Record each replaced file; on any
+    # Install SKILL.md and scripts first, VERSION last. Record each replaced file; on any
     # failure restore all of them (from the backup, or delete if it did not exist before).
     local -a done_rel=()
     local failed="" i
-    for rel in SKILL.md CONSTITUTION_SNIPPET.md; do
+    for rel in SKILL.md; do
         done_rel+=("$rel")
         install_one "$src/$rel" "$SKILL_ROOT/$rel" || { failed="$rel"; break; }
     done

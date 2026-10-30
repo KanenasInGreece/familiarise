@@ -24,7 +24,7 @@ bash <this-skill-dir>/scripts/familiarise.sh --update    # install the newest ta
 
 `--update` needs no `.env`. It reads the newest `vX.Y.Z` tag of `FAMILIARISE_REPO` (default
 `https://github.com/KanenasInGreece/familiarise.git`), never downgrades, backs up to
-`.backup/<version>-<timestamp>/` (verified), then replaces only `SKILL.md`, `CONSTITUTION_SNIPPET.md`,
+`.backup/<version>-<timestamp>/` (verified), then replaces only `SKILL.md`,
 `VERSION` and `scripts/*`. It never touches `.env` or `frameworks/`, nor `~/framework-tunnel.sh`
 (use `scripts/sync_local.sh` for that). Without a `VERSION` file the version is `0.1.0`; a `VERSION`
 that is empty or not `X.Y.Z` is an error.

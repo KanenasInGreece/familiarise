@@ -82,13 +82,13 @@ upd() { FAMILIARISE_REPO="$S/$1.git" bash "$2/scripts/familiarise.sh" --update 2
 # h. install failure rolls back, VERSION stays old, rerun can update
 mkrepo good2 0.2.0 0.2.0
 H="$S/inst-h"; mkinst2 "$H" 0.1.0
-mv "$H/scripts/place_snippet.sh" "$S/ps.bak"; mkdir "$H/scripts/place_snippet.sh"
+chmod 555 "$H/scripts"  # no temp file can be created beside scripts/familiarise.sh (root ignores this)
 before="$(snap "$H")"
 out="$(upd good2 "$H")"; rc=$?; echo "$out"
 [ "$rc" = 1 ] && [ "$(cat "$H/VERSION")" = "0.1.0" ] && [ "$(cat "$H/SKILL.md")" = "old skill" ] \
   && [ "$before" = "$(snap "$H")" ] && ! ls "$H"/scripts/.familiarise-new.* >/dev/null 2>&1
 check "h: install failure rolls back, VERSION unchanged" $?
-rmdir "$H/scripts/place_snippet.sh"; mv "$S/ps.bak" "$H/scripts/place_snippet.sh"
+chmod 755 "$H/scripts"
 sleep 1  # backup dir name has 1 s resolution
 upd good2 "$H" >/dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$H/VERSION")" = "0.2.0" ] && [ "$(cat "$H/SKILL.md")" = "new skill 0.2.0" ]
@@ -139,7 +139,7 @@ upd ten "$M" >/dev/null; rc=$?
 check "m: 0.10.0 installs over 0.2.0" $?
 
 # n. skill/familiarise is a symlink in the tag (M1)
-ev="$S/evil"; mkdir -p "$ev/scripts"; echo "evil" > "$ev/SKILL.md"; echo "evil" > "$ev/CONSTITUTION_SNIPPET.md"
+ev="$S/evil"; mkdir -p "$ev/scripts"; echo "evil" > "$ev/SKILL.md"
 echo 0.2.0 > "$ev/VERSION"; echo "echo hi" > "$ev/scripts/familiarise.sh"
 w="$S/w-psym"; mkdir -p "$w/skill"; ln -s "$ev" "$w/skill/familiarise"
 ( cd "$w" && git init -q . && git add -A && git commit -q -m x && git tag v0.2.0 ) && git clone -q --bare "$w" "$S/psym.git"

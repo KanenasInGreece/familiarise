@@ -1,89 +1,73 @@
 # familiarise
 
-Connects an agent's shared-memory skill to the framework whose tunnel is open. Each framework (site) has its own gateway and its own tokens. This project makes the switch safe: the tunnel decides which framework is live, and the skill copies only that framework's token file.
+**Mission:** make an agent's shared-memory skill follow the framework whose tunnel is open. Design detail lives in `skill/familiarise/SKILL.md` and the script headers. This file holds only what a builder, reviewer or operator needs here.
+
+## Ground rules
+
+1. Token files never enter git, chat or output. Print identity and gateway version only. Never source a `.env`.
+2. Each agent has its own `frameworks/`. Tokens are never shared between agents.
+3. Never overwrite a token by accident. An unmatched `.env` is saved as `.env-unsaved-<timestamp>` first.
+4. `~/framework-tunnel.sh` is edited in place, outside this repo. Do not copy it in.
+5. The gateway sets identity from the token. Never guess `AGENT_NAME` locally.
+6. Ask the operator before anything destructive or outward-facing: token files, installs into agent folders, pushes, system packages.
+7. Verify each step before the next. Scripts are idempotent.
+8. Shared-memory saves from this folder use project `familiarise`. Facts and decisions go to shared memory, not here.
 
 ## Components
 
-| Part | Location | Who runs it |
-|---|---|---|
-| Tunnel script | `~/framework-tunnel.sh` (home directory, not in this project) | Xenofon, by hand, in a terminal |
-| Familiarise skill (source) | `skill/familiarise/` | — (installed per agent) |
-| Familiarise skill (installed) | `~/.claude/skills/familiarise/` | the agent, via `/familiarise` |
-| Token files | `<agent's familiarise skill>/frameworks/.env-<host>`, e.g. `~/.claude/skills/familiarise/frameworks/.env-workstation` | operator; one per framework, per agent |
-| Shared-memory skill | `~/.claude/skills/shared-memory/` | updated by its own `update_skill.sh` |
-| Test doubles | `tests/` | manual tests of the tunnel script |
+| Part | Location |
+|---|---|
+| Tunnel script (not in repo) | `~/framework-tunnel.sh` |
+| Skill source | `skill/familiarise/` |
+| Skill installed per agent | `~/.claude/skills/familiarise/`, `~/.gemini/config/skills/familiarise/` |
+| Token files (operator-managed) | `<agent skills dir>/familiarise/frameworks/.env-<host>` |
+| Sync to local agents | `scripts/sync_local.sh [--dry-run]` (local to this folder; later replaced by `--update` from the repo) |
+| Test doubles | `tests/fake_ssh.sh`, `tests/fake_gateway.py` |
 
-The tunnel script stays in the home directory, as Xenofon asked. Do not keep a second copy in this project. Edit `~/framework-tunnel.sh` directly, and record changes here.
+## Roles and cooperation
 
-## The flow (Xenofon's example)
+- **Orchestrator** (the main session): splits work, creates one worktree per task, merges only after a clean review, runs the final checks, reports to the operator. Does not write a build task itself when a builder is available.
+- **Builder** (Haiku; Sonnet for multi-file or security-sensitive work): one task, one worktree, one branch `build/<task>`. Edits only inside its worktree. Runs `bash -n` and the tests. Commits with the trailer for its own model. Does not merge, push, or touch other worktrees or installed agents.
+- **Reviewer** (Opus): reads `git diff main...build/<task>`, runs the checks, and reports findings with file, line, severity and a failure scenario. Read-only. Never fixes. Re-reviews after a fix.
+- **Merge gate:** the orchestrator runs `git merge --no-ff build/<task>` only when the reviewer reports no open high or medium findings. Then it removes the worktree and branch.
+- **Operator:** decides ground rule 6 items, token files, and identity names.
 
-1. In a terminal, run `~/framework-tunnel.sh workstation`.
-2. ssh asks for the passphrase or password in that terminal. Nothing else prompts, and the agent never sees it.
-3. The tunnel comes up: `localhost:8888` forwards to the workstation gateway. The script checks `/health`.
-4. The script writes `~/.config/shared-memory/active-framework` (the framework, the session pid), then opens a **session shell**. The session shell holds the tunnel open. Agents read the file, so they can run from any shell.
-5. In the agent, run `/familiarise`. It reads the file, checks that the session in it is alive, and that `localhost:8888/health` answers. Then it copies `~/.claude/skills/familiarise/frameworks/.env-workstation` over the shared-memory skill's `.env`.
-6. Shared memory now uses the workstation token and identifies as `claude-chromebook`.
-7. To close, exit the session shell. The tunnel closes, and the file is removed. From another terminal, `~/framework-tunnel.sh workstation stop` does the same: it ends the session shell and closes the tunnel.
+Worktrees live outside the repo: `git worktree add ../familiarise-wt/<task> -b build/<task> main`. Remove with `git worktree remove` and `git branch -d` after merge.
 
-## Why a state file, not an environment variable
+**Offline or on local models:** the same roles apply. A local model may take the builder role. Without a reachable Opus reviewer, nothing merges until the operator approves.
 
-The first design set `SHARED_MEMORY_FRAMEWORK` in a session shell. It worked only for agents started from that shell. A running script cannot set a variable in other processes. The state file in `~/.config/shared-memory/` is visible to any agent in any shell. The tunnel script creates it when the tunnel opens and removes it when the tunnel closes. A file left behind by a crash is caught by the pid check, because `familiarise` refuses when the session pid is gone.
+Every commit ends with `Co-Authored-By: <model that wrote it> <noreply@anthropic.com>`.
 
 ## Conventions
 
-- **Framework name = the ssh alias** from `~/.ssh/config` (for example `workstation`). The token file is `.env-<alias>`. Names are limited to `A-Za-z0-9._-`.
-- **Identity is chosen on the gateway, never on the client.** The gateway keeps a registry, `AGENT_TOKENS`, of `name:sha256(token)`. It stamps every write with the name bound to the presented token, and it ignores the body `agent_id`. `AGENT_ID` in a framework `.env` is only a label the client sends; the gateway overrides it. Source: `SECURITY.md` in the Shared_memory repo (v0.3.5 auth, "verified agent identity is stamped server-side"). Local agents pick no identity. Each agent's name is whatever the gateway minted its token under: `doctor` reports it as `agent` (for this Chromebook's workstation token it is `chromebook-claude`). Do not set `AGENT_NAME` locally to guess one.
-- **Token files are never printed, quoted, summarised or sourced.** `familiarise` prints the identity and the gateway version only.
-- **Token files are operator-managed.** `familiarise` never creates or edits them. It creates the folder if it is missing, and it reports a missing file (exit 2) instead of guessing.
-- **Per agent, never shared:** `frameworks/` is a folder in the **familiarise** skill, not in the shared-memory skill. Each agent has its own, at `<agent skills dir>/familiarise/frameworks/` (for Claude: `~/.claude/skills/familiarise/frameworks/`). The shared-memory skill folder never holds or refers to this folder. The copied `.env` is the only thing that goes into the shared-memory skill. No agent reads another agent's tokens. The tunnel state file in `~/.config/shared-memory/active-framework` is the one shared item, because a machine has one tunnel at a time. It holds no tokens.
-- **Never overwrite a token by accident.** If the current `.env` matches no framework file, both the tunnel script and `familiarise` save it as `.env-unsaved-<timestamp>` (mode 600) before copying.
-
-## Per-agent install
-
-Each agent that uses shared memory gets its own copy:
-
-1. Copy `skill/familiarise/` to that agent's skills directory, for example `~/.claude/skills/familiarise/`.
-2. Copy `.env.example` to `.env` beside `SKILL.md`, and set:
-   - `SHARED_MEMORY_SKILL_DIR`: this agent's shared-memory skill directory
-   - `FRAMEWORK_ENV_DIR`: this agent's token folder, `frameworks/` inside its own familiarise skill directory (for Claude: `~/.claude/skills/familiarise/frameworks`)
-   - `AGENT_NAME`: a local label only. The gateway decides identity from the token, so do not guess it. It drives only the mismatch warning in `familiarise`.
-3. Keep `.env` mode 600. It is never shipped.
-4. Place the constitution block: `scripts/place_snippet.sh [--dry-run] <constitution-file>`. It copies the `CONSTITUTION_SNIPPET.md` block verbatim above the shared-memory block, or at the top when that block is absent. A re-run replaces the block, it never duplicates it. The operator confirms the file before it is written.
-
-The snippet is the prerequisite: it tells an agent that `/familiarise` must run before any shared-memory call, and that a "no framework tunnel" result means not connected.
-
-Installed on this Chromebook: `~/.claude/skills/familiarise/` for Claude (`AGENT_NAME=claude-chromebook`, a label) and `~/.gemini/config/skills/familiarise/` for Gemini (`AGENT_NAME=gemini-chromebook`, a guess). Both labels should be dropped; see the open items.
-
-## Exit codes (`scripts/familiarise.sh`)
-
-- `0`: `.env` copied, or no framework session (nothing changed)
-- `1`: session or tunnel not usable. Nothing copied.
-- `2`: no token file for this framework. Nothing copied.
+- Shell scripts: `set -uo pipefail`. Quote every path. Never `source` a `.env`.
+- Exit codes live in the script header and SKILL.md. Change them in both.
+- Constitution blocks are copied verbatim from `CONSTITUTION_SNIPPET.md` and placed with `scripts/place_snippet.sh`. The operator confirms the file first.
+- `CONSTITUTION_SNIPPET.md` is the canonical text. Do not restate it here.
 
 ## Testing
 
-`tests/fake_ssh.sh` and `tests/fake_gateway.py` stand in for ssh and the gateway, so the lifecycle can be tested on a spare port without touching a live tunnel. Set `FRAMEWORK_TUNNEL_SSH=<path>/fake_ssh.sh`, `FRAMEWORK_TUNNEL_LOCAL_PORT=18888` and `FRAMEWORK_TUNNEL_STATE_DIR=<scratch>`.
+Use only the test doubles, on a spare port and a scratch state dir:
 
-Cases that were run and passed on 2026-10-30:
+```
+FRAMEWORK_TUNNEL_SSH=tests/fake_ssh.sh
+FRAMEWORK_TUNNEL_LOCAL_PORT=18888
+FRAMEWORK_TUNNEL_STATE_DIR=<scratch>
+```
 
-- Tunnel (re-run after the state-file change): start, status during the session, a second start refused, a different host refused, clean exit, stop from another terminal (the session shell gets HUP), a crashed session (`kill -9`) shown as STALE and recovered by the next start, ssh failure, gateway not answering, invalid host, bad action, stop when nothing is open, and start refused while port 8888 is held by something else.
-- Familiarise: copy on the happy path (mode 600, byte-identical, no token in output), no session, host mismatch, stale state, no state file, no token file, gateway down, unsaved `.env` preserved, identity warning.
-
-**Not tested:** the real ssh password prompt, and the real workstation gateway. Both need a terminal and the live workstation.
+Never use port 8888 or `~/.config/shared-memory` in a test.
 
 ## Known limits
 
-- The session shell is bash. Other shells are not supported.
-- Stopping from another terminal ends the session shell with HUP. Unsaved work in that shell is lost.
-- `familiarise` checks liveness through the state file and `/health`. It does not check that the token is valid. A bad token shows up when the first search or save fails.
+- The session shell is bash only.
+- Stopping from another terminal sends HUP to the session shell. Unsaved work there is lost.
+- `familiarise` checks liveness through the state file and `/health`. It does not check the token. A bad token fails on the first search or save.
 
-## Shared-memory saves
+## Open items
 
-Saves made from this folder go to the shared-memory project `familiarise`. Use the domain `architecture` for design and architecture facts. Pass `"project":"familiarise"` in the metadata JSON, or leave the client to derive it. The project and the `architecture` section are both registered on the gateway.
-
-## Open items (not done yet)
-
-- Mint a token on each gateway for each local agent. The name it is minted under is that agent's identity (for Claude here, `chromebook-claude`). This needs the operator on each site.
-- Token files for the other frameworks. Only `workstation` exists.
-- Shared-memory project in this folder. Xenofon asked for it to be created once this folder is in use.
-- The `~/framework-tunnel.sh` script is not yet tested with a real ssh prompt.
+- Operator: mint a token on each gateway for each local agent. The name minted is that agent's identity (Claude here: `chromebook-claude`).
+- Gemini has no token yet. Its `frameworks/` is empty.
+- Operator: decide whether to drop the `AGENT_NAME` mismatch warning in `familiarise.sh` and the `AGENT_NAME` line in the Claude `.env`.
+- Operator: place the familiarise block in `~/.gemini/GEMINI.md` (needs confirmation).
+- Review findings still open: tunnel script `stop` pid check, the start lock, and the trap comment (`~/framework-tunnel.sh`, outside the repo).
+- Real ssh password prompt and the live workstation gateway are untested.

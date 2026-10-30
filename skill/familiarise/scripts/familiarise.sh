@@ -266,7 +266,7 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
             if [ -f "$_f" ] && [ ! -L "$_f" ] && [ "$(stat -c '%s %.9Y' -- "$_f" 2>/dev/null)" = "$_sz $_mt" ]; then
                 matched=1; break
             fi
-        done < <(awk '$1 ~ /^[0-9a-f]{64}$/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/' "$INDEX" 2>/dev/null)
+        done < <(awk 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/' "$INDEX" 2>/dev/null)
     fi
     if [ "$matched" -eq 0 ]; then
         saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$(date +%Y%m%d-%H%M%S)"
@@ -295,7 +295,7 @@ if [ -n "$idx_tmp" ]; then
     {
         # A symlinked .index is ignored (never followed). Keep only well-formed lines of other hosts.
         if [ -f "$INDEX" ] && [ ! -L "$INDEX" ]; then
-            awk -v t=".env-$HOST" '$1 ~ /^[0-9a-f]{64}$/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/ && $2 != t { print $1 "  " $2 "  " $3 "  " $4 }' "$INDEX"
+            awk -v t=".env-$HOST" 'length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9.]+$/ && $2 != t { print $1 "  " $2 "  " $3 "  " $4 }' "$INDEX"
         fi
         printf '%s  .env-%s  %s\n' "$src_hash" "$HOST" "${src_meta// /  }"
     } > "$idx_tmp" 2>/dev/null \

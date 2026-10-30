@@ -78,7 +78,7 @@ printf 'AGENT_ID=agent-aaa\nTOKEN=sekret-token-aaa-value\n' > "$FW/.env-aaa"; ch
 run beta; rc=$?
 chmod 600 "$FW/.env-aaa"
 [ "$rc" = 0 ] && cmp -s "$SM/.env" "$FW/.env-beta" && [ "$(unsaved)" = 0 ] \
-  && [ -s "$CALLS" ] && ! grep -q 'env-aaa' "$CALLS"; r=$?; rm -f "$FW/.env-aaa"; (exit $r)
+  && [ -s "$CALLS" ] && ! grep -q 'env-aaa' "$CALLS" && ! grep -q 'env-aaa' "$S/out"; r=$?; rm -f "$FW/.env-aaa"; (exit $r)
 check "d: unrelated token file never named in any tool call (and connect succeeds)" $?
 
 # e. no temp files left, index mode 600

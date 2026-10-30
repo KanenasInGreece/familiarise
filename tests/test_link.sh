@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end test of the symlink design in familiarise.sh. Runs the real script against scratch dirs, a
-# scratch state dir and tests/fake_gateway.py on a spare port. Never touches ~/.claude, ~/.gemini,
-# ~/.config/shared-memory or port 8888.
+# End-to-end test of the symlink design in familiarise.sh. Runs the real script against scratch
+# dirs, a scratch state dir and tests/fake_gateway.py on a spare port. Never touches ~/.claude,
+# ~/.gemini, ~/.config/shared-memory or port 8888.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 S="$(mktemp -d)"; GW=""
@@ -106,7 +106,7 @@ r=$?
 if [ "$r" = 0 ]; then ok "k: no cat/cmp/sha256sum/grep/cp/... call names a token file ($(wc -l < "$CALLS") shimmed calls)"
 else bad "k: shimmed tool touched a token path"; cat "$CALLS"; fi
 
-# l: M1 backup path appears just before the real mv: earlier backup bytes kept, DEST unchanged
+# l: backup path appears just before the real mv: earlier backup bytes kept, DEST unchanged
 rm -f "$D" "$FW"/.env-unsaved-*; printf 'foreign-l\n' > "$D"
 SH="$S/shiml"; mkdir -p "$SH"; REALMV="$(command -v mv)"
 printf '#!/bin/sh\nfor a; do l=$a; done\nprintf earlier-backup > "$l"\nexec "%s" "$@"\n' "$REALMV" > "$SH/mv"; chmod +x "$SH/mv"
@@ -151,7 +151,7 @@ PATH="$SHIM_MV:$PATH" run beta; rc=$?
 [ "$rc" = 143 ] && grep -q 'The previous .env token is at' "$S/out" && [ "$(unsaved)" = 1 ] && [ ! -e "$D" ] && [ ! -L "$D" ]
 check "p: TERM right after the backup move exits 143 and reports where the token is" $?
 
-# q: INT during the health check, before any trap was installed in the old script. Nothing changes.
+# q: INT during the health check: the trap is set from the first step, so exit 143, no change.
 ln -sfn "$FW/.env-beta" "$D"; before="$(readlink "$D")"; rm -f "$FW"/.env-unsaved-*
 cat > "$SHIM_CURL/curl" <<'EOF'
 #!/usr/bin/env bash

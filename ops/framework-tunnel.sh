@@ -6,15 +6,14 @@
 #   framework-tunnel.sh <host> stop      close the tunnel (run from another terminal)
 #   framework-tunnel.sh <host> status    report whether the tunnel to <host> is up
 #
-# start and stop refuse unless stdin is a terminal (operator-only; a guard against accidents, not
-# authentication). status works from anywhere.
+# start and stop refuse unless stdin is a terminal (operator-only; a guard against accidents,
+# not authentication). status works from anywhere.
 #
 # <host> is an ssh alias from ~/.ssh/config. The tunnel is localhost:8888 -> <host>:localhost:8888.
 #
 # Opening: ssh asks for passphrases or passwords in this terminal, by hand. Then the tunnel is
-# announced in ~/.config/shared-memory/active-framework, and a session shell starts. Any agent can read
-# that file. Exiting the session shell closes the tunnel and removes the file.
-# `stop` closes the tunnel, ends the session shell and removes the file the same way.
+# announced in ~/.config/shared-memory/active-framework (any agent can read it) and a session
+# shell starts. Exiting that shell, or `stop`, closes the tunnel and removes the file.
 #
 # Test overrides (leave unset in normal use): FRAMEWORK_TUNNEL_SSH, FRAMEWORK_TUNNEL_LOCAL_PORT,
 # FRAMEWORK_TUNNEL_REMOTE_PORT, FRAMEWORK_TUNNEL_STATE_DIR.
@@ -43,7 +42,8 @@ case "$ACTION" in
     *) usage ;;
 esac
 
-# Test overrides must never reach the real state dir: if any is set, a scratch FRAMEWORK_TUNNEL_STATE_DIR is required.
+# Test overrides must never reach the real state dir: if any is set, a scratch
+# FRAMEWORK_TUNNEL_STATE_DIR is required.
 if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TUNNEL_REMOTE_PORT:-}${FRAMEWORK_TUNNEL_STATE_DIR:-}" ]; then
     if [ -z "${FRAMEWORK_TUNNEL_STATE_DIR:-}" ]; then
         echo "✗ a test override is set, so FRAMEWORK_TUNNEL_STATE_DIR must be set to a scratch folder too." >&2
@@ -62,8 +62,8 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
     fi
 fi
 
-# start and stop are operator-only: they need a terminal on stdin. status is open to everyone (agents).
-# This guards against accidents (an agent running stop by mistake). It is not authentication.
+# start and stop are operator-only (a terminal on stdin); status is open to agents. This guards
+# against accidents (an agent running stop by mistake). It is not authentication.
 if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then
     echo "✗ $ACTION is operator-only: run it from your own terminal." >&2
     exit 1
@@ -87,7 +87,9 @@ pid_alive() {
     [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
 }
 
-# The state file is written by the session. It holds the session script pid and the shell pid.
+# Load the state file written by the session (HOST, MAIN_PID, SHELL_PID, SOCK).
+# Globals: sets S_HOST, S_MAIN, S_SHELL, S_SOCK (S_SOCK defaults to this port's socket).
+# Returns: 1 if there is no state file.
 read_state() {
     S_HOST=""; S_MAIN=""; S_SHELL=""; S_SOCK="$STATE_DIR/ssh-$LOCAL_PORT.sock"
     [ -f "$STATE_FILE" ] || return 1
@@ -127,9 +129,9 @@ is_session_shell() {
     return 1
 }
 
-# Exit handler of a session. Every session has its own ssh socket ($SOCK, ssh-<port>-<pid>.sock), so it
-# always closes that one master and never a socket another session made. The shared state file is
-# removed only if it is missing or names this session.
+# Exit handler of a session. Every session has its own ssh socket ($SOCK,
+# ssh-<port>-<pid>.sock), so it closes only its own master, never another session's. The
+# shared state file is removed only if it is missing or names this session.
 own_cleanup() {
     close_master "$SOCK"
     if read_state && [ "$S_MAIN" != "$$" ]; then
@@ -138,6 +140,7 @@ own_cleanup() {
     rm -f "$STATE_FILE"
 }
 
+# Report whether the tunnel to $HOST is up. Exits 0 if UP, 1 otherwise; read-only.
 do_status() {
     if ! read_state; then
         echo "tunnel: DOWN (no session open)"
@@ -159,6 +162,8 @@ do_status() {
     exit 1
 }
 
+# Ask the session shell to exit, which closes the tunnel and removes the state. Exits 1 if
+# the shell is busy (the close stays pending) or its pid cannot be trusted.
 do_stop() {
     if ! read_state; then
         echo "no tunnel open"
@@ -169,9 +174,10 @@ do_stop() {
         exit 1
     fi
     if [ -n "$S_SHELL" ]; then
-        # Only signal a pid that is still this session's shell: the session script must be alive,
-        # and the pid must be its child, started as `bash --rcfile <state dir>/session-rc.<main pid> -i`.
-        # After a crash the pid may have been reused by an unrelated process.
+        # Only signal a pid that is still this session's shell: the session script must be
+        # alive and the pid its child, started as
+        # `bash --rcfile <state dir>/session-rc.<main pid> -i`. After a crash the pid may have
+        # been reused by an unrelated process.
         if ! pid_alive "$S_MAIN"; then
             echo "✗ session pid $S_MAIN is gone, so shell pid $S_SHELL cannot be trusted. Not signalling it." >&2
             echo "  State left in $STATE_FILE. Run: $NAME $HOST start (clears stale state), or remove it by hand." >&2
@@ -206,11 +212,12 @@ do_stop() {
     echo "tunnel to '$HOST' closed"
 }
 
-# Start lock: held from the checks until the state file is written, so two starts cannot both pass.
-# An atomic mkdir with the owner pid inside. It leaves no file behind once released (flock would leave
-# an empty start.lock).
+# Start lock: held from the checks until the state file is written, so two starts cannot both
+# pass. An atomic mkdir with the owner pid inside; unlike flock it leaves no empty start.lock.
 LOCK="$STATE_DIR/start.lock"
 LOCK_KIND=""
+# Take the start lock, breaking a stale one (dead owner, or ownerless and older than 5 s).
+# Globals: sets LOCK_KIND. Returns: 1 if another start holds it.
 acquire_lock() {
     local tries=0 owner stale
     while ! mkdir "$LOCK.d" 2>/dev/null; do
@@ -223,8 +230,8 @@ acquire_lock() {
         elif pid_alive "$owner"; then
             return 1
         fi
-        # Stale: take it by atomic rename, so only one contender wins. If what we moved is not the
-        # stale lock we judged (a new holder got in first), put it back and report busy.
+        # Stale: take it by atomic rename, so only one contender wins. If what we moved is not
+        # the stale lock we judged (a new holder got in first), put it back and report busy.
         stale="$LOCK.stale.$$"
         if mv "$LOCK.d" "$stale" 2>/dev/null; then
             if [ "$(cat "$stale/pid" 2>/dev/null)" != "$owner" ]; then
@@ -246,11 +253,14 @@ release_lock() {
     LOCK_KIND=""
 }
 
+# Open the tunnel and run the session shell until it exits. Only start creates the state dir.
+# Globals: sets SOCK (per session); writes STATE_FILE and the session rcfile.
 do_start() {
     SOCK="$STATE_DIR/ssh-$LOCAL_PORT-$$.sock"          # this session's own socket
     mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
-    # Release the lock, and close this session's own master if ssh got that far, on every way out,
-    # signals included (bash runs a trap after the foreground command ends; the EXIT trap runs after `exit 1`).
+    # Release the lock and close this session's own master (if ssh got that far) on every way
+    # out. For signals, bash runs the trap after the foreground command ends, and the EXIT
+    # trap runs after `exit 1`.
     trap 'release_lock; own_cleanup' EXIT
     trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
@@ -308,8 +318,8 @@ rm -f "$rc"
 trap 'exit 0' HUP
 EOF
     trap "release_lock; own_cleanup; rm -f '$rc'" EXIT
-    # While the session shell runs, bash waits for it, so a HUP or TERM sent to this script is only
-    # handled after the shell exits; it then exits with status 1 (the EXIT trap closes the tunnel).
+    # While the session shell runs, bash waits for it, so a HUP or TERM sent to this script is
+    # handled only after the shell exits; it then exits 1 (the EXIT trap closes the tunnel).
     # Ctrl-C is ignored here, so it goes to the session shell only.
     trap : INT
     trap 'exit 1' HUP TERM

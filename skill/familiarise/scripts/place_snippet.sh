@@ -36,12 +36,12 @@ rc=0
 stripped="$(awk -v s="$START" -v e="$END" '
     function at_start(l, sub_,   i) { i=index(l,sub_); return i>0 && substr(l,1,i-1) ~ /^[ \t]*$/ }
     at_start($0,s) {
-        if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; exit 3 }
+        if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; failed=1; exit 3 }
         skip=1; startline=NR; next }
     skip { if (at_start($0,e)) { skip=0; after=1 }; next }
     after && $0=="" { after=0; next }
     { after=0; print }
-    END { if (skip) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?
+    END { if (skip && !failed) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "place_snippet: $TARGET not changed (unterminated or nested familiarise block; fix it by hand)" >&2
     exit 3

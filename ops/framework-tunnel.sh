@@ -50,10 +50,14 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
         exit 1
     fi
     # Compare resolved real paths against the passwd home, not $HOME, so HOME=/other cannot hide it.
-    REAL_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
-    if [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "${REAL_HOME:-$HOME}/.config/shared-memory")" ] ||
+    REAL_HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+    if [ -z "$REAL_HOME" ]; then
+        echo "✗ cannot resolve the passwd home directory (getent returned nothing), so the real-state-dir guard cannot be checked. Refusing." >&2
+        exit 1
+    fi
+    if [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "$REAL_HOME/.config/shared-memory")" ] ||
        [ "$(readlink -f -m -- "$STATE_DIR")" = "$(readlink -f -m -- "$HOME/.config/shared-memory")" ]; then
-        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir (${REAL_HOME:-$HOME}/.config/shared-memory)." >&2
+        echo "✗ FRAMEWORK_TUNNEL_STATE_DIR must not be the real state dir ($REAL_HOME/.config/shared-memory)." >&2
         exit 1
     fi
 fi

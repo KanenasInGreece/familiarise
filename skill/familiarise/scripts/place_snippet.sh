@@ -46,8 +46,8 @@ fi
 
 if printf '%s\n' "$stripped" | grep -qF -- "$SHARED"; then
     placed="above the shared-memory block"
-    out="$(printf '%s\n' "$stripped" | awk -v b="$block" -v sh="$SHARED" '
-        !done && index($0,sh)==1 { print b; print ""; done=1 }
+    out="$(printf '%s\n' "$stripped" | BLOCK="$block" awk -v sh="$SHARED" '
+        !done && index($0,sh)==1 { print ENVIRON["BLOCK"]; print ""; done=1 }
         { print }')"
 else
     placed="at the top (no shared-memory block found)"

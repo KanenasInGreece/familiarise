@@ -38,7 +38,10 @@ Requirements: Linux. Needs bash, ssh, curl and git.
    - Absent: nothing is changed. Say so and stop.
 2. Checks that the session named in the file is still running and that `localhost:8888/health` answers.
 3. Copies `FRAMEWORK_ENV_DIR/.env-<framework>` over `SHARED_MEMORY_SKILL_DIR/.env`.
-   If the current `.env` matches no framework file, it is saved first as `.env-unsaved-<timestamp>`.
+   Before overwriting a different `.env`, it hashes only that `.env` and looks the hash up in
+   `frameworks/.index` (mode 600, lines `<sha256>  .env-<host>`, hashes only, written atomically on each copy).
+   No other token file is read. If the hash is not in the index (no index, or a token that predates it),
+   the current `.env` is saved first as `.env-unsaved-<timestamp>`.
 
 ## Exit codes
 

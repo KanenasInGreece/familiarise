@@ -6,6 +6,11 @@
 # FRAMEWORK_ENV_DIR/.env-<framework> over SHARED_MEMORY_SKILL_DIR/.env. Nothing is copied unless every
 # check passes.
 #
+# Fingerprint index: FRAMEWORK_ENV_DIR/.index (mode 600) holds one line per copied token,
+# "<sha256-hex>  .env-<host>", hashes only. Before overwriting a differing .env, only that .env is hashed
+# and looked up; no other token file is opened. A hash not in the index (no index, or a token that
+# predates it) is backed up first as .env-unsaved-<timestamp>. The index is replaced atomically.
+#
 # Usage:
 #   familiarise.sh             point shared memory at the open framework (default)
 #   familiarise.sh --version   print "familiarise <version>" (VERSION file beside SKILL.md; 0.1.0 if the file is absent)
@@ -240,14 +245,14 @@ SRC="$FRAMEWORK_ENV_DIR/.env-$HOST"
 [ -f "$SRC" ] || { say "✗ no token file for '$HOST'. Expected: $SRC"; say "The operator adds it. .env was not changed."; exit 2; }
 
 DEST="$SHARED_MEMORY_SKILL_DIR/.env"
+INDEX="$FRAMEWORK_ENV_DIR/.index"
 if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
-    # Keep the current .env if no framework file matches it, so a token is never lost.
+    # Keep the current .env unless it is a known token. "Known" means its sha256 is in .index. Only DEST
+    # is read; no other token file is opened. No index, or a token that predates it: not known, so back up.
     matched=0
-    for f in "$FRAMEWORK_ENV_DIR"/.env-*; do
-        [ -f "$f" ] || continue
-        case "$(basename "$f")" in .env-unsaved-*) continue ;; esac
-        cmp -s "$f" "$DEST" && { matched=1; break; }
-    done
+    dest_hash="$(sha256sum -- "$DEST" 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$dest_hash" ] || fail "could not hash the current .env. Nothing copied."
+    if [ -f "$INDEX" ] && grep -q -- "^$dest_hash  \.env-" "$INDEX" 2>/dev/null; then matched=1; fi
     if [ "$matched" -eq 0 ]; then
         saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$(date +%Y%m%d-%H%M%S)"
         # Never write through an existing path (a directory or symlink would receive the token copy).
@@ -259,12 +264,27 @@ if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
             || { rm -f -- "$saved"; fail "could not back up the current .env to $saved. Nothing copied."; }
         chmod 600 "$saved" 2>/dev/null && cmp -s "$DEST" "$saved" \
             || { rm -f -- "$saved"; fail "backup of the current .env to $saved failed verification. Nothing copied."; }
-        say "saved the previous .env (matched no framework file) to $saved"
+        say "saved the previous .env (not in the fingerprint index) to $saved"
     fi
 fi
 
 cp "$SRC" "$DEST" && chmod 600 "$DEST" || fail "could not copy $SRC to $DEST"
 cmp -s "$SRC" "$DEST" || fail "copy verification failed"
+
+# --- fingerprint index: "<sha256>  .env-<host>", hashes only, one line per host, replaced atomically ---
+src_hash="$(sha256sum -- "$SRC" 2>/dev/null | cut -d' ' -f1)"
+idx_tmp=""
+[ -n "$src_hash" ] && idx_tmp="$(umask 077; mktemp "$FRAMEWORK_ENV_DIR/.index.tmp.XXXXXX" 2>/dev/null)"
+if [ -n "$idx_tmp" ]; then
+    {
+        if [ -f "$INDEX" ]; then awk -v t=".env-$HOST" '$2 != t' "$INDEX"; fi
+        printf '%s  .env-%s\n' "$src_hash" "$HOST"
+    } > "$idx_tmp" 2>/dev/null \
+        && chmod 600 "$idx_tmp" && mv -T -f -- "$idx_tmp" "$INDEX" \
+        || { rm -f -- "$idx_tmp"; say "warning: could not update the fingerprint index $INDEX"; }
+else
+    say "warning: could not update the fingerprint index $INDEX"
+fi
 
 # --- report (identity only, never the token) ------------------------------------------------------
 AGENT_ID_IN_ENV="$(grep -E '^AGENT_ID=' "$DEST" | head -1 | cut -d= -f2-)"

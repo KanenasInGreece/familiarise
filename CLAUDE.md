@@ -13,6 +13,12 @@
 7. Verify each step before the next. Scripts are idempotent.
 8. Shared-memory saves from this folder use project `familiarise`. Facts and decisions go to shared memory, not here.
 
+## Repository
+
+- Remote: `origin` = `git@github.com:KanenasInGreece/familiarise.git`
+- Branch: `main`
+- `/scripts/` is git-ignored (local `sync_local.sh`), so it is not in the remote.
+
 ## Components
 
 | Part | Location |

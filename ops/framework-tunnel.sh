@@ -101,6 +101,15 @@ is_session_shell() {
     return 1
 }
 
+# Exit handler of a session: close the tunnel only if the state still belongs to this script.
+# A newer session's state and socket must never be removed by an older session's handler.
+own_cleanup() {
+    if read_state && [ "$S_MAIN" != "$$" ]; then
+        return 0
+    fi
+    close_tunnel
+}
+
 do_status() {
     if ! read_state; then
         echo "tunnel: DOWN (no session open)"
@@ -145,12 +154,22 @@ do_stop() {
             echo "  State left in $STATE_FILE for you to inspect." >&2
             exit 1
         fi
-        # The session shell traps HUP and exits; that lets the session script close the tunnel.
+        # The session shell traps HUP and exits, but bash runs that trap only after the foreground
+        # command ends. So HUP the shell, then HUP its running children (the foreground job).
         kill -HUP "$S_SHELL" 2>/dev/null
+        for c in $(ps -o pid= --ppid "$S_SHELL" 2>/dev/null); do kill -HUP "$c" 2>/dev/null; done
         for _ in $(seq 1 40); do
             [ -f "$STATE_FILE" ] || break
             sleep 0.25
         done
+        if pid_alive "$S_SHELL" && is_session_shell "$S_SHELL" "$S_MAIN"; then
+            echo "✗ the session shell (pid $S_SHELL) is still running. Not closing the tunnel." >&2
+            echo "  End what is running in it, or exit it, then run stop again. State left in $STATE_FILE." >&2
+            exit 1
+        fi
+    elif pid_alive "$S_MAIN"; then
+        echo "✗ the session (pid $S_MAIN) has not recorded its shell yet. Try again in a moment." >&2
+        exit 1
     fi
     if [ -f "$STATE_FILE" ]; then
         close_tunnel
@@ -244,7 +263,7 @@ rm -f "$rc"
 # \`stop\` sends HUP to this shell. End the shell on it, so the session script can close the tunnel.
 trap 'exit 0' HUP
 EOF
-    trap "release_lock; close_tunnel; rm -f '$rc'" EXIT
+    trap "release_lock; own_cleanup; rm -f '$rc'" EXIT
     # While the session shell runs, bash waits for it, so a HUP or TERM sent to this script is only
     # handled after the shell exits; it then exits with status 1 (the EXIT trap closes the tunnel).
     # Ctrl-C is ignored here, so it goes to the session shell only.

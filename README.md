@@ -15,8 +15,6 @@ An agent's shared memory talks to one framework gateway, and each gateway needs 
 
 The skill never opens tunnels, enters passwords or changes the gateway. The operator opens and closes tunnels and manages token files. Agents only check status.
 
-![familiarise in action](docs/demo.webm)
-
 ## Repo layout
 
 | Path | Purpose |
@@ -24,7 +22,6 @@ The skill never opens tunnels, enters passwords or changes the gateway. The oper
 | `skill/familiarise/` | The skill, installed into each agent |
 | `ops/framework-tunnel.sh` | Tunnel script, source of truth |
 | `tests/` | Fake ssh and fake gateway for end-to-end tests |
-| `docs/` | Demo video |
 
 ## Licence
 

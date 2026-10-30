@@ -135,7 +135,7 @@ do_stop() {
             echo "  State left in $STATE_FILE for you to inspect." >&2
             exit 1
         fi
-        # HUP ends an interactive bash. Its exit lets the session script close the tunnel.
+        # The session shell traps HUP and exits; that lets the session script close the tunnel.
         kill -HUP "$S_SHELL" 2>/dev/null
         for _ in $(seq 1 40); do
             [ -f "$STATE_FILE" ] || break
@@ -195,6 +195,8 @@ do_start() {
 [ -f ~/.bashrc ] && . ~/.bashrc
 echo "SHELL_PID=\$\$" >> "$STATE_FILE"
 rm -f "$rc"
+# \`stop\` sends HUP to this shell. End the shell on it, so the session script can close the tunnel.
+trap 'exit 0' HUP
 EOF
     trap "close_tunnel; rm -f '$rc'" EXIT
     # Ctrl-C goes to the session shell, not the script. HUP and TERM to the script end the session.

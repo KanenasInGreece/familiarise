@@ -139,7 +139,7 @@ upd ten "$M" >/dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$M/VERSION")" = "0.10.0" ]
 check "m: 0.10.0 installs over 0.2.0" $?
 
-# n. skill/familiarise is a symlink in the tag (M1)
+# n. skill/familiarise is a symlink in the tag
 ev="$S/evil"; mkdir -p "$ev/scripts"; echo "evil" > "$ev/SKILL.md"
 echo 0.2.0 > "$ev/VERSION"; echo "echo hi" > "$ev/scripts/familiarise.sh"
 w="$S/w-psym"; mkdir -p "$w/skill"; ln -s "$ev" "$w/skill/familiarise"
@@ -148,14 +148,14 @@ N="$S/inst-n"; mkinst2 "$N" 0.1.0; before="$(snap "$N")"
 out="$(upd psym "$N")"; rc=$?; echo "$out"
 [ "$rc" = 1 ] && [ "$before" = "$(snap "$N")" ]; check "n: symlinked skill/familiarise rejected, nothing changed" $?
 
-# o. installed target is a symlink (L1)
+# o. installed target is a symlink
 O="$S/inst-o"; mkinst2 "$O" 0.1.0; mv "$O/SKILL.md" "$S/real-skill.md"; ln -s "$S/real-skill.md" "$O/SKILL.md"
 out="$(upd good2 "$O")"; rc=$?; echo "$out"
 [ "$rc" = 1 ] && echo "$out" | grep -q "is a symlink" && ! echo "$out" | grep -q "rollback" \
   && [ "$(cat "$O/VERSION")" = "0.1.0" ] && [ -L "$O/SKILL.md" ] && [ "$(cat "$S/real-skill.md")" = "old skill" ]
 check "o: installed symlink refused before backup, nothing changed" $?
 
-# p. empty / whitespace-only local VERSION is an error (L2)
+# p. empty / whitespace-only local VERSION is an error
 for content in "" "   "; do
     P="$S/inst-p"; rm -rf "$P"; mkinst2 "$P"; printf '%s\n' "$content" > "$P/VERSION"; before="$(snap "$P")"
     out="$(upd good2 "$P")"; rc=$?
@@ -163,7 +163,7 @@ for content in "" "   "; do
     check "p: empty/blank local VERSION '$content' exits 1, nothing changed" $?
 done
 
-# q. nested ref in the remote is ignored (L3)
+# q. nested ref in the remote is ignored
 mkrepo nest 0.2.0 0.2.0
 git --git-dir="$S/nest.git" tag "x/refs/tags/v9.9.9" "v0.2.0"
 git --git-dir="$S/nest.git" for-each-ref | grep -q "refs/tags/x/refs/tags/v9.9.9" 

@@ -254,7 +254,7 @@ do_start() {
     trap 'release_lock; own_cleanup' EXIT
     trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
-        echo "✗ another '$NAME start' is in progress (it holds $LOCK). Wait for it, or finish its ssh prompt." >&2
+        echo "✗ another '$NAME start' is in progress (it holds $LOCK.d). Wait for it, or finish its ssh prompt." >&2
         exit 1
     fi
     if read_state; then

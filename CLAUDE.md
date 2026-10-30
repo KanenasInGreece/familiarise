@@ -47,7 +47,13 @@ Every commit ends with `Co-Authored-By: <model that wrote it> <noreply@anthropic
 
 ## Testing
 
-Use only the test doubles, on a spare port and a scratch state dir:
+- **End to end first.** A test is valid only if it runs the real flow and checks the result. Unit tests of single variables pass when logic is wrong, so do not write them as proof.
+- **Connect proves the script connects.** The real `~/framework-tunnel.sh workstation`, then `/familiarise`, then the status check.
+- **Disconnect proves the state resets.** Exit the session shell, then check that the state file is gone, the tunnel is down, and the `.env` copy is in its expected state.
+- **Targeted checks only** for functions where a regression would be silent (for example, a marker-strip in `place_snippet.sh`). Run them against scratch copies, never live files.
+- The operator runs the live connect and disconnect, since it needs the ssh prompt. An agent can run the fake-based flow below.
+
+Fake-based flow, on a spare port and a scratch state dir:
 
 ```
 FRAMEWORK_TUNNEL_SSH=tests/fake_ssh.sh

@@ -9,6 +9,9 @@
 #   - copies SKILL.md, CONSTITUTION_SNIPPET.md and scripts/ from skill/familiarise/
 #   - creates frameworks/ (mode 700) if missing; never touches its contents
 #   - creates .env from .env.example if missing; an existing .env is never changed
+# Also installs ops/framework-tunnel.sh to ~/framework-tunnel.sh: temp file in the same folder, chmod 755,
+# then mv (atomic, safe while a tunnel is open). An old, different copy is kept as
+# ~/framework-tunnel.sh.bak-<timestamp>. An identical copy is left alone.
 # Never edits a constitution file. Placing the block is a separate, operator-confirmed step.
 set -euo pipefail
 
@@ -65,3 +68,26 @@ for entry in "${CLIENTS[@]}"; do
         echo "  .env created (shared memory $sm)"
     fi
 done
+
+# Tunnel script: ops/ is the source of truth, the home file is installed from it.
+TUNNEL_SRC="$PROJECT/ops/framework-tunnel.sh"
+TUNNEL_DST="$HOME/framework-tunnel.sh"
+echo "tunnel script: $TUNNEL_DST"
+if [ -f "$TUNNEL_DST" ] && cmp -s "$TUNNEL_SRC" "$TUNNEL_DST"; then
+    echo "  identical, nothing to do"
+elif [ "$dry" -eq 1 ]; then
+    [ -f "$TUNNEL_DST" ] && echo "  would: back up to $TUNNEL_DST.bak-<timestamp>"
+    echo "  would: install $TUNNEL_SRC (mode 755, atomic mv)"
+else
+    if [ -f "$TUNNEL_DST" ]; then
+        bak="$TUNNEL_DST.bak-$(date +%Y%m%d-%H%M%S)"
+        cp -p "$TUNNEL_DST" "$bak"
+        chmod 644 "$bak"
+        echo "  backup: $bak"
+    fi
+    tmp="$(mktemp "$HOME/.framework-tunnel.sh.XXXXXX")"
+    cp "$TUNNEL_SRC" "$tmp"
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$TUNNEL_DST"
+    echo "  installed"
+fi

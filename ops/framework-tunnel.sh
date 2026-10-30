@@ -203,16 +203,11 @@ do_stop() {
 }
 
 # Start lock: held from the checks until the state file is written, so two starts cannot both pass.
-# flock when available (fd 9, released on exit); otherwise an atomic mkdir with the owner pid inside.
+# An atomic mkdir with the owner pid inside. It leaves no file behind once released (flock would leave
+# an empty start.lock).
 LOCK="$STATE_DIR/start.lock"
 LOCK_KIND=""
 acquire_lock() {
-    if command -v flock >/dev/null 2>&1; then
-        exec 9>"$LOCK"
-        flock -n 9 || return 1
-        LOCK_KIND=flock
-        return 0
-    fi
     local tries=0 owner stale
     while ! mkdir "$LOCK.d" 2>/dev/null; do
         tries=$((tries + 1))
@@ -236,12 +231,12 @@ acquire_lock() {
         fi
     done
     echo "$$" > "$LOCK.d/pid"
+    rm -f "$LOCK"                   # empty file left by older versions that used flock
     LOCK_KIND=mkdir
 }
 
 release_lock() {
     case "$LOCK_KIND" in
-        flock) exec 9>&- ;;
         mkdir) [ "$(cat "$LOCK.d/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK.d" ;;
     esac
     LOCK_KIND=""
@@ -279,7 +274,7 @@ do_start() {
     # ssh authenticates in this terminal, then forks into the background as the control master.
     if ! "$SSH" -M -S "$SOCK" -f -N \
             -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -o ConnectTimeout=15 -L "$LOCAL_PORT:localhost:$REMOTE_PORT" "$HOST" 9>&-; then
+            -o ConnectTimeout=15 -L "$LOCAL_PORT:localhost:$REMOTE_PORT" "$HOST"; then
         rm -f "$SOCK"
         echo "✗ could not open the ssh tunnel to '$HOST'" >&2
         echo "  If the key is passphrase-protected: ssh-add ~/.ssh/id_ed25519" >&2

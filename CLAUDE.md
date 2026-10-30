@@ -28,7 +28,7 @@
 
 - **Orchestrator** (the main session): splits work, creates one worktree per task, merges only after a clean review, runs the final checks, reports to the operator. Does not write a build task itself when a builder is available.
 - **Builder** (Haiku; Sonnet for multi-file or security-sensitive work): one task, one worktree, one branch `build/<task>`. Edits only inside its worktree. Runs `bash -n` and the tests. Commits with the trailer for its own model. Does not merge, push, or touch other worktrees or installed agents.
-- **Reviewer** (Opus): reads `git diff main...build/<task>`, runs the checks, and reports findings with file, line, severity and a failure scenario. Read-only. Never fixes. Re-reviews after a fix.
+- **Reviewer** (Opus 5.5 only; Haiku and Sonnet never review): reads `git diff main...build/<task>`, runs the checks, and reports findings with file, line, severity and a failure scenario. Read-only. Never fixes. Re-reviews after a fix.
 - **Merge gate:** the orchestrator runs `git merge --no-ff build/<task>` only when the reviewer reports no open high or medium findings. Then it removes the worktree and branch.
 - **Operator:** decides ground rule 6 items, token files, and identity names.
 

@@ -42,6 +42,8 @@ Every commit ends with `Co-Authored-By: <model that wrote it> <noreply@anthropic
 
 - Shell scripts: `set -uo pipefail`. Quote every path. Never `source` a `.env`.
 - Exit codes live in the script header and SKILL.md. Change them in both.
+- `place_snippet.sh` exits: 0 placed, already up to date, or dry run; 1 error (no snippet, markers missing, insertion or write failed; target unchanged); 2 usage; 3 unterminated or nested familiarise block (target unchanged). 4 is awk-internal ("no shared-memory block", handled by placing at the top); the script never exits 4.
+- `familiarise.sh` exit 1 also covers a backup failure: the `.env-unsaved-*` path already exists, or the copy or its check fails. Nothing is copied.
 - Constitution blocks are copied verbatim from `CONSTITUTION_SNIPPET.md` and placed with `scripts/place_snippet.sh`. The operator confirms the file first.
 - `CONSTITUTION_SNIPPET.md` is the canonical text. Do not restate it here.
 

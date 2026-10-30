@@ -15,9 +15,11 @@ START='<!-- familiarise:constitution-snippet'  # prefix: matches any version
 END='<!-- /familiarise:constitution-snippet -->'
 SHARED='<!-- shared-memory:constitution-snippet'
 
+usage="usage: place_snippet.sh [--dry-run] <constitution-file>"
 dry_run=0
 if [ "${1:-}" = "--dry-run" ]; then dry_run=1; shift; fi
-TARGET="${1:?usage: place_snippet.sh [--dry-run] <constitution-file>}"
+if [ "$#" -ne 1 ] || [ -z "$1" ] || [ "${1#-}" != "$1" ]; then echo "$usage" >&2; exit 2; fi
+TARGET="$1"
 [ -f "$SNIPPET" ] || { echo "place_snippet: no snippet at $SNIPPET" >&2; exit 1; }
 
 block="$(awk -v s="$START" -v e="$END" 'index($0,s)==1{p=1} p{print} index($0,e)==1{p=0}' "$SNIPPET")"
@@ -28,20 +30,37 @@ current=""
 
 # Remove any existing familiarise block, so a re-run replaces it rather than duplicating it.
 # The blank line that follows the block is removed with it, or every re-run would add one.
-stripped="$(printf '%s\n' "$current" | awk -v s="$START" -v e="$END" '
-    index($0,s)==1 { skip=1 }
+# Lines are dropped only when a matching END is seen. A START with no END (end of file, or
+# another START first) aborts with exit 3 and nothing is written. A lone END line is kept.
+rc=0
+stripped="$(awk -v s="$START" -v e="$END" '
+    index($0,s)==1 {
+        if (skip) { print "place_snippet: a second familiarise START before the END (line " NR ")" > "/dev/stderr"; exit 3 }
+        skip=1; startline=NR; next }
     skip { if (index($0,e)==1) { skip=0; after=1 }; next }
     after && $0=="" { after=0; next }
-    { after=0; print }')"
+    { after=0; print }
+    END { if (skip) { print "place_snippet: familiarise START at line " startline " has no END" > "/dev/stderr"; exit 3 } }' <<< "$current")" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "place_snippet: $TARGET not changed (unterminated or nested familiarise block; fix it by hand)" >&2
+    exit 3
+fi
 
-if printf '%s\n' "$stripped" | grep -qF -- "$SHARED"; then
-    placed="above the shared-memory block"
-    out="$(printf '%s\n' "$stripped" | awk -v b="$block" -v sh="$SHARED" '
-        !done && index($0,sh)==1 { print b; print ""; done=1 }
-        { print }')"
-else
+# One test places the block: the first line that is the shared-memory marker, optionally indented.
+# Not found (awk exit 4) falls back to the top, never to silent loss.
+placed="above the shared-memory block"
+rc=0
+out="$(BLOCK="$block" awk -v sh="$SHARED" '
+    function is_shared(l,   i) { i=index(l,sh); return i>0 && substr(l,1,i-1) ~ /^[ \t]*$/ }
+    !done && is_shared($0) { print ENVIRON["BLOCK"]; print ""; done=1 }
+    { print }
+    END { if (!done) exit 4 }' <<< "$stripped")" || rc=$?
+if [ "$rc" -eq 4 ]; then
     placed="at the top (no shared-memory block found)"
     out="$block"$'\n\n'"$stripped"
+elif [ "$rc" -ne 0 ]; then
+    echo "place_snippet: insertion failed (awk exit $rc), $TARGET not changed" >&2
+    exit 1
 fi
 
 if [ "$dry_run" -eq 1 ]; then

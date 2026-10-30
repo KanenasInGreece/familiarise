@@ -33,8 +33,9 @@
 #      link creation or rename failed; verification failed. On a refusal before the backup move, nothing
 #      changed.
 #   2  no token file for this framework: missing, or not a regular file (a directory is exit 2); nothing changed
-# 143  killed by TERM/INT/HUP: the temp link is removed and the lock released. If the backup move had
-#      happened, stderr says the token is at the .env-unsaved path and DEST is absent.
+# 143  killed by TERM/INT/HUP at any point after the trap is set (before the config, the health check and any change):
+#      the temp link is removed and the lock released. If the backup move had completed, stderr says the
+#      token is at the .env-unsaved path and DEST is absent. A signal during the move is acted on after it.
 # After the backup move, DEST is absent until the link lands: any failure then names the backup path.
 # The backup move is no-clobber (mv -n). Across devices mv copies the bytes, and a failed move can leave
 # a partial copy at the backup path while the original stays at DEST (that message names both).
@@ -61,6 +62,18 @@ LOCAL_PORT="${FRAMEWORK_TUNNEL_LOCAL_PORT:-8888}"
 
 say() { echo "familiarise: $*"; }
 fail() { echo "familiarise: ✗ $*" >&2; exit "${2:-1}"; }
+
+# Signals are handled from the first command on, so every interrupted run exits 143 (see the header).
+# The token has moved once $saved exists and DEST is gone. A signal during mv is handled only after mv
+# returns, so this checks the files, not MOVED.
+saved=""; MOVED=0; DEST=""
+on_signal() {
+    if [ -n "$saved" ] && [ -f "$saved" ] && [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
+        echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
+    fi
+    exit 143
+}
+trap on_signal TERM INT HUP
 
 # --- version and self-update (handled before the config block; no .env needed) ----------------------
 local_version() {
@@ -312,15 +325,9 @@ fail_post() {
         fail "$1 Nothing changed."
     fi
 }
-on_signal() {
-    [ "$MOVED" = 1 ] && echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
-    exit 143
-}
-
 # Atomic link: create the link under a temp name beside DEST, then rename it over DEST.
 LINK_TMP="$SHARED_MEMORY_SKILL_DIR/.env.link.$$"
 trap 'rm -f -- "$LINK_TMP"' EXIT
-trap on_signal TERM INT HUP
 if [ -n "$saved" ]; then
     # No-clobber move (a same-filesystem move reads no bytes; across devices mv copies them, so a failed
     # move can leave a partial copy at $saved; the original is then still at DEST).
@@ -342,7 +349,7 @@ if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
 fi
 mv -T -f -- "$LINK_TMP" "$DEST" || fail_post "could not replace $DEST with the link."
 if [ -L "$DEST" ] && [ "$(readlink -f -- "$DEST")" = "$(readlink -f -- "$TARGET")" ]; then
-    trap - EXIT TERM INT HUP
+    trap - EXIT
 else
     [ -L "$DEST" ] && rm -f -- "$DEST"
     fail_post "verification failed: $DEST does not resolve to $TARGET (bad link removed)."

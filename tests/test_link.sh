@@ -136,5 +136,35 @@ check "n: relative FRAMEWORK_ENV_DIR exits 1, nothing changed" $?
 mkdir "$FW/.env-dirhost"; run dirhost; rc=$?
 [ "$rc" = 2 ] && [ "$(readlink "$D")" = "$before" ]; check "o: directory target exits 2, DEST unchanged" $?
 
+# Signal tests. Shims stand in for mv and curl and send the signal from inside the real run.
+SHIM_MV="$S/shim-mv"; SHIM_CURL="$S/shim-curl"; mkdir -p "$SHIM_MV" "$SHIM_CURL"
+REAL_MV="$(command -v mv)"
+# p: TERM right after the backup move (mv -n). The move completes, then the trap runs.
+cat > "$SHIM_MV/mv" <<EOF
+#!/usr/bin/env bash
+"$REAL_MV" "\$@" || exit \$?
+case " \$* " in *" -n "*) kill -TERM \$PPID ;; esac
+EOF
+chmod +x "$SHIM_MV/mv"
+rm -f "$D"; printf 'parent-unsaved\n' > "$D"; rm -f "$FW"/.env-unsaved-*
+PATH="$SHIM_MV:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && grep -q 'The previous .env token is at' "$S/out" && [ "$(unsaved)" = 1 ] && [ ! -e "$D" ] && [ ! -L "$D" ]
+check "p: TERM right after the backup move exits 143 and reports where the token is" $?
+
+# q: INT during the health check, before any trap was installed in the old script. Nothing changes.
+ln -sfn "$FW/.env-beta" "$D"; before="$(readlink "$D")"; rm -f "$FW"/.env-unsaved-*
+cat > "$SHIM_CURL/curl" <<'EOF'
+#!/usr/bin/env bash
+p=$PPID
+while [ -n "$p" ] && [ "$p" -gt 1 ] && ! tr '\0' ' ' < "/proc/$p/cmdline" | grep -q 'familiarise.sh'; do
+    p="$(awk '{print $4}' "/proc/$p/stat")"
+done
+kill -INT "$p"; exit 7
+EOF
+chmod +x "$SHIM_CURL/curl"
+PATH="$SHIM_CURL:$PATH" run beta; rc=$?
+[ "$rc" = 143 ] && [ "$(readlink "$D")" = "$before" ] && [ "$(unsaved)" = 0 ]
+check "q: INT before the health check exits 143 and changes nothing" $?
+
 [ "$FAIL" = 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$FAIL"

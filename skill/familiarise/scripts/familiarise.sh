@@ -2,18 +2,19 @@
 # familiarise.sh — point this agent's shared-memory skill at the framework whose tunnel is open.
 #
 # framework-tunnel.sh announces an open tunnel in ~/.config/shared-memory/active-framework. This script
-# reads that file, checks that the tunnel session is alive and the gateway answers, then copies
-# FRAMEWORK_ENV_DIR/.env-<framework> over SHARED_MEMORY_SKILL_DIR/.env. Nothing is copied unless every
-# check passes.
+# reads that file, checks that the tunnel session is alive and the gateway answers, then makes
+# SHARED_MEMORY_SKILL_DIR/.env a symlink to FRAMEWORK_ENV_DIR/.env-<framework>. Switching repoints the
+# link; a rotated token is seen through the link at once. No token file is ever read, copied or hashed,
+# and no index is kept: only file names and links are touched (readlink, test, ln, mv, chmod, mkdir).
 #
-# Fingerprint index: FRAMEWORK_ENV_DIR/.index (mode 600) holds one line per copied token,
-# "<sha256-hex>  .env-<host>" (whole-file SHA-256 only, no token text; lines of any other shape are
-# ignored). Before overwriting a differing .env, that .env is hashed and looked up. A hit counts only if
-# .env-<host> is a regular file (not a symlink), is not the same file as the shared-memory .env (-ef), and
-# its own whole-file SHA-256 equals the index hash; that named file is the only other token file ever read.
-# The copy is written to a temp file beside the .env and renamed into place. Otherwise (no hit, stale, changed or missing file, no
-# index, a symlinked index, or a token that predates the index) the current .env is backed up first as
-# .env-unsaved-<timestamp>. The index is replaced atomically.
+# The target must be a regular file (not a symlink) whose resolved path is FRAMEWORK_ENV_DIR/.env-<host>.
+# DEST cases: already a link to the target: "already linked to <host>", nothing changed. A link to
+# something else: replaced. A regular file (maybe an unsaved token): MOVED (not copied) to
+# FRAMEWORK_ENV_DIR/.env-unsaved-<YYYYmmdd-HHMMSS>, mode 600, refused if that path exists. Absent: linked.
+# The link is made under a temp name (.env.link.<pid>) and renamed over DEST; the temp link is removed on
+# any failure or kill. The parent of DEST must be writable, checked before any change. After linking,
+# readlink must show DEST -> target. FAMILIARISE_NOW (optional, A-Za-z0-9._- only) replaces the timestamp
+# in the .env-unsaved name; it exists for tests only.
 #
 # Usage:
 #   familiarise.sh             point shared memory at the open framework (default)
@@ -25,13 +26,21 @@
 #                              Never downgrades. Does not touch ~/framework-tunnel.sh (use sync_local.sh).
 #
 # Exit codes (default run):
-#   0  .env copied (or no tunnel is open, which changes nothing)
-#   1  not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
-#      or the existing .env could not be backed up (backup path exists, or the backup failed its check);
-#      or the existing .env could not be hashed; or the shared-memory .env is a symlink ("shared-memory .env
-#      is a symlink; replace it with a regular file first. Nothing copied.").
-#      Nothing is copied. (A failed copy or copy check also exits 1, after the backup.)
-#   2  no token file exists for this framework
+#   0  linked, already linked, or no tunnel is open (which changes nothing)
+#   1  any refusal or failure: config missing or incomplete, state file invalid, session ended, or gateway
+#      silent; token file is a symlink or resolves outside FRAMEWORK_ENV_DIR; the skill directory is not
+#      writable; DEST is neither a regular file nor a symlink; backup path exists or the move failed;
+#      link creation or rename failed; verification failed. On a refusal before the backup move, nothing
+#      changed.
+#   2  no token file for this framework: missing, or not a regular file (a directory is exit 2); nothing changed
+# 143  killed by TERM/INT/HUP: the temp link is removed and the lock released. If the backup move had
+#      happened, stderr says the token is at the .env-unsaved path and DEST is absent.
+# After the backup move, DEST is absent until the link lands: any failure then names the backup path.
+# The backup move is no-clobber (mv -n). Across devices mv copies the bytes, and a failed move can leave
+# a partial copy at the backup path while the original stays at DEST (that message names both).
+# One run at a time: flock on FRAMEWORK_ENV_DIR/.lock; busy: exit 1 "another familiarise is running".
+# FRAMEWORK_ENV_DIR must be an absolute path (exit 1 otherwise). The link is verified by resolution
+# (readlink -f of DEST equals that of the target); a bad link is removed.
 # Exit codes (--version): 0.
 # Exit codes (--update): 0 up to date or updated; 1 any failure (no git, no tags, network or clone
 #   failure, unsafe tag content such as a symlink (also as skill/ or skill/familiarise), a symlink among the
@@ -204,18 +213,21 @@ esac
 # --- config (per agent, written when the skill is installed) ---------------------------------
 [ -f "$CONFIG" ] || fail "no config at $CONFIG. Copy .env.example there and set the paths for this agent."
 
-SHARED_MEMORY_SKILL_DIR=""; FRAMEWORK_ENV_DIR=""; AGENT_NAME=""
+SHARED_MEMORY_SKILL_DIR=""; FRAMEWORK_ENV_DIR=""
 while IFS='=' read -r key val; do
     val="${val%\"}"; val="${val#\"}"
     case "$key" in
         SHARED_MEMORY_SKILL_DIR) SHARED_MEMORY_SKILL_DIR="${val/#\~/$HOME}" ;;
         FRAMEWORK_ENV_DIR)       FRAMEWORK_ENV_DIR="${val/#\~/$HOME}" ;;
-        AGENT_NAME)              AGENT_NAME="$val" ;;
     esac
 done < <(grep -E '^[A-Z_]+=' "$CONFIG")
 
 [ -n "$SHARED_MEMORY_SKILL_DIR" ] || fail "SHARED_MEMORY_SKILL_DIR is not set in $CONFIG"
 [ -n "$FRAMEWORK_ENV_DIR" ]       || fail "FRAMEWORK_ENV_DIR is not set in $CONFIG"
+case "$FRAMEWORK_ENV_DIR" in
+    /*) ;;
+    *) fail "FRAMEWORK_ENV_DIR must be an absolute path ($FRAMEWORK_ENV_DIR). Nothing changed." ;;
+esac
 [ -f "$SHARED_MEMORY_SKILL_DIR/scripts/memory_bridge.py" ] \
     || fail "no shared-memory skill at $SHARED_MEMORY_SKILL_DIR (memory_bridge.py not found)"
 
@@ -246,84 +258,97 @@ echo "$HEALTH" | grep -q '"status": *"ok"' \
 GATEWAY_VERSION="$(echo "$HEALTH" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
 
 # --- token file ------------------------------------------------------------------------------------
-mkdir -p "$FRAMEWORK_ENV_DIR" && chmod 700 "$FRAMEWORK_ENV_DIR"
-SRC="$FRAMEWORK_ENV_DIR/.env-$HOST"
-[ -f "$SRC" ] || { say "✗ no token file for '$HOST'. Expected: $SRC"; say "The operator adds it. .env was not changed."; exit 2; }
-
-# sha256 of a file read from stdin (a path argument can make sha256sum prefix a backslash).
-hash_of() { sha256sum < "$1" 2>/dev/null | cut -d' ' -f1; }
+# Only file names and links are touched from here on: no token file is read, copied or hashed.
+mkdir -p "$FRAMEWORK_ENV_DIR" && chmod 700 "$FRAMEWORK_ENV_DIR" \
+    || fail "could not create or secure $FRAMEWORK_ENV_DIR. Nothing changed."
+# One familiarise at a time (lock on fd 9, released when the script exits).
+exec 9>"$FRAMEWORK_ENV_DIR/.lock" && flock -n 9 \
+    || fail "another familiarise is running; nothing changed."
+TARGET="$FRAMEWORK_ENV_DIR/.env-$HOST"
+if [ -L "$TARGET" ]; then
+    fail "token file for '$HOST' is a symlink ($TARGET). Nothing changed."
+fi
+if [ ! -f "$TARGET" ]; then
+    say "✗ no token file for '$HOST' (missing or not a regular file, e.g. a directory). Expected: $TARGET"
+    say "The operator adds it. .env was not changed."; exit 2
+fi
+FW_REAL="$(readlink -f -- "$FRAMEWORK_ENV_DIR")" && [ "$(readlink -f -- "$TARGET")" = "$FW_REAL/.env-$HOST" ] \
+    || fail "token file for '$HOST' resolves outside $FRAMEWORK_ENV_DIR. Nothing changed."
 
 DEST="$SHARED_MEMORY_SKILL_DIR/.env"
-INDEX="$FRAMEWORK_ENV_DIR/.index"
-[ -L "$DEST" ] && fail "shared-memory .env is a symlink; replace it with a regular file first. Nothing copied."
-if [ -f "$DEST" ] && ! cmp -s "$DEST" "$SRC"; then
-    # Keep the current .env unless it is a known token. "Known" means its sha256 is in .index. DEST
-    # is hashed, plus on a hit the one framework file the index names (never any other). No index, or a token that predates it: not known, so back up.
-    matched=0
-    dest_hash="$(hash_of "$DEST")"
-    [ -n "$dest_hash" ] || fail "could not hash the current .env. Nothing copied."
-    # A hit counts only if the named framework file is a regular file whose whole-file sha256 equals the
-    # index hash (only that one file is hashed); otherwise the token may live nowhere else, so back it up.
-    if [ -f "$INDEX" ] && [ ! -L "$INDEX" ]; then
-        while read -r _h _n; do
-            [ "$_h" = "$dest_hash" ] || continue
-            _f="$FRAMEWORK_ENV_DIR/$_n"
-            if [ -f "$_f" ] && [ ! -L "$_f" ] && [ ! "$_f" -ef "$DEST" ] && [ "$(hash_of "$_f")" = "$_h" ]; then
-                matched=1; break
-            fi
-        done < <(awk 'NF==2 && length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/' "$INDEX" 2>/dev/null)
-    fi
-    if [ "$matched" -eq 0 ]; then
-        saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$(date +%Y%m%d-%H%M%S)"
-        # Never write through an existing path (a directory or symlink would receive the token copy).
-        { [ -e "$saved" ] || [ -L "$saved" ]; } \
-            && fail "backup path $saved already exists. Nothing copied."
-        # Backup first, mode 600 from the start, verified byte for byte. Any failure stops here,
-        # before the overwrite, so the unmatched token is never lost.
-        ( umask 077; cp -- "$DEST" "$saved" ) 2>/dev/null \
-            || { rm -f -- "$saved"; fail "could not back up the current .env to $saved. Nothing copied."; }
-        chmod 600 "$saved" 2>/dev/null && cmp -s "$DEST" "$saved" \
-            || { rm -f -- "$saved"; fail "backup of the current .env to $saved failed verification. Nothing copied."; }
-        say "saved the previous .env (not in the fingerprint index) to $saved"
-    fi
+# (a) already linked: nothing to do.
+if [ -L "$DEST" ] && [ "$(readlink -- "$DEST")" = "$TARGET" ]; then
+    say "already linked to $HOST"
+    say "framework: $HOST"
+    say "linked: $DEST -> $TARGET"
+    say "gateway:   localhost:$LOCAL_PORT answers, version ${GATEWAY_VERSION:-unknown}"
+    exit 0
+fi
+# The parent directory must allow creating and renaming entries; checked before any change.
+{ [ -d "$SHARED_MEMORY_SKILL_DIR" ] && [ -w "$SHARED_MEMORY_SKILL_DIR" ] && [ -x "$SHARED_MEMORY_SKILL_DIR" ]; } \
+    || fail "$SHARED_MEMORY_SKILL_DIR is not writable. Nothing changed."
+# A DEST that is neither a link nor a regular file (e.g. a directory) is not touched.
+if [ -e "$DEST" ] && [ ! -L "$DEST" ] && [ ! -f "$DEST" ]; then
+    fail "$DEST exists and is not a regular file or a symlink. Nothing changed."
+fi
+saved=""; MOVED=0
+if [ -f "$DEST" ] && [ ! -L "$DEST" ]; then
+    # (c) a regular file may be an unsaved token: MOVE it (its bytes are not read) into the framework dir.
+    stamp="${FAMILIARISE_NOW:-$(date +%Y%m%d-%H%M%S)}"
+    case "$stamp" in
+        ""|*[!A-Za-z0-9._-]*) fail "FAMILIARISE_NOW has characters outside A-Za-z0-9._-. Nothing changed." ;;
+    esac
+    saved="$FRAMEWORK_ENV_DIR/.env-unsaved-$stamp"
+    { [ -e "$saved" ] || [ -L "$saved" ]; } \
+        && fail "backup path $saved already exists. Nothing changed."
 fi
 
-# Atomic copy: temp file beside DEST (mode 600 from creation), verified, then renamed over DEST.
-# DEST is never written in place, so a hard link to a token file is replaced, not overwritten.
-trap 'rm -f -- "${dest_tmp:-}"' EXIT
-trap 'exit 143' TERM INT HUP
-dest_tmp="$(umask 077; mktemp "$SHARED_MEMORY_SKILL_DIR/.env.tmp.XXXXXX" 2>/dev/null)" \
-    || fail "could not create a temporary file in $SHARED_MEMORY_SKILL_DIR. Nothing copied."
-{ cp -- "$SRC" "$dest_tmp" && chmod 600 "$dest_tmp" && cmp -s "$SRC" "$dest_tmp"; } 2>/dev/null \
-    || { rm -f -- "$dest_tmp"; fail "could not copy $SRC to $DEST (copy verification failed)"; }
-mv -T -f -- "$dest_tmp" "$DEST" || { rm -f -- "$dest_tmp"; fail "could not replace $DEST"; }
-dest_tmp=""; trap - EXIT TERM INT HUP
+# After the backup move, DEST is absent until the link lands. Every failure from then on says so.
+fail_post() {
+    if [ "$MOVED" = 1 ]; then
+        fail "$1 The previous .env token is at $saved; $DEST is now absent."
+    else
+        fail "$1 Nothing changed."
+    fi
+}
+on_signal() {
+    [ "$MOVED" = 1 ] && echo "familiarise: ✗ killed. The previous .env token is at $saved; $DEST is now absent." >&2
+    exit 143
+}
 
-# --- fingerprint index: "<sha256>  .env-<host>", hashes only, one line per host, replaced atomically ---
-src_hash="$(hash_of "$SRC")"
-idx_tmp=""
-[ -n "$src_hash" ] && idx_tmp="$(umask 077; mktemp "$FRAMEWORK_ENV_DIR/.index.tmp.XXXXXX" 2>/dev/null)"
-if [ -n "$idx_tmp" ]; then
-    {
-        # A symlinked .index is ignored (never followed). Keep only well-formed lines of other hosts.
-        if [ -f "$INDEX" ] && [ ! -L "$INDEX" ]; then
-            awk -v t=".env-$HOST" 'NF==2 && length($1)==64 && $1 !~ /[^0-9a-f]/ && $2 ~ /^\.env-[A-Za-z0-9._-]+$/ && $2 != t { print $1 "  " $2 }' "$INDEX"
-        fi
-        printf '%s  .env-%s\n' "$src_hash" "$HOST"
-    } > "$idx_tmp" 2>/dev/null \
-        && chmod 600 "$idx_tmp" && mv -T -f -- "$idx_tmp" "$INDEX" \
-        || { rm -f -- "$idx_tmp"; say "warning: could not update the fingerprint index $INDEX"; }
+# Atomic link: create the link under a temp name beside DEST, then rename it over DEST.
+LINK_TMP="$SHARED_MEMORY_SKILL_DIR/.env.link.$$"
+trap 'rm -f -- "$LINK_TMP"' EXIT
+trap on_signal TERM INT HUP
+if [ -n "$saved" ]; then
+    # No-clobber move (a same-filesystem move reads no bytes; across devices mv copies them, so a failed
+    # move can leave a partial copy at $saved; the original is then still at DEST).
+    mv -n -T -- "$DEST" "$saved" \
+        || fail "could not move the current .env to $saved (a cross-device move copies bytes). Check $DEST and $saved."
+    if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+        fail "backup path appeared during the run; nothing changed. ($saved)"
+    fi
+    MOVED=1
+    { [ -f "$saved" ] && [ ! -L "$saved" ]; } \
+        || fail_post "backup $saved is not a regular file after the move."
+    chmod 600 -- "$saved" || fail_post "could not set mode 600 on $saved."
+    say "saved the previous .env to $saved"
+fi
+rm -f -- "$LINK_TMP"
+ln -s -- "$TARGET" "$LINK_TMP" || fail_post "could not create a link in $SHARED_MEMORY_SKILL_DIR."
+if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
+    fail_post "$DEST became a regular file during the run; not replaced."
+fi
+mv -T -f -- "$LINK_TMP" "$DEST" || fail_post "could not replace $DEST with the link."
+if [ -L "$DEST" ] && [ "$(readlink -f -- "$DEST")" = "$(readlink -f -- "$TARGET")" ]; then
+    trap - EXIT TERM INT HUP
 else
-    say "warning: could not update the fingerprint index $INDEX"
+    [ -L "$DEST" ] && rm -f -- "$DEST"
+    fail_post "verification failed: $DEST does not resolve to $TARGET (bad link removed)."
 fi
 
-# --- report (identity only, never the token) ------------------------------------------------------
-AGENT_ID_IN_ENV="$(grep -E '^AGENT_ID=' "$DEST" | head -1 | cut -d= -f2-)"
+# --- report (never reads a token) ----------------------------------------------------------------
 say "framework: $HOST"
-say ".env copied from $SRC"
-say "identity:  ${AGENT_ID_IN_ENV:-(AGENT_ID not set in the framework file)}"
+say "linked: $DEST -> $TARGET"
 say "gateway:   localhost:$LOCAL_PORT answers, version ${GATEWAY_VERSION:-unknown}"
-if [ -n "$AGENT_NAME" ] && [ "$AGENT_ID_IN_ENV" != "$AGENT_NAME" ]; then
-    say "warning: this agent is configured as '$AGENT_NAME', but the framework file sets '${AGENT_ID_IN_ENV:-no AGENT_ID}'"
-fi
 exit 0

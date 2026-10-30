@@ -38,13 +38,19 @@ Requirements: Linux. Needs bash, ssh, curl and git.
    - Absent: nothing is changed. Say so and stop.
 2. Checks that the session named in the file is still running and that `localhost:8888/health` answers.
 3. Copies `FRAMEWORK_ENV_DIR/.env-<framework>` over `SHARED_MEMORY_SKILL_DIR/.env`.
-   If the current `.env` matches no framework file, it is saved first as `.env-unsaved-<timestamp>`.
+   Before overwriting a different `.env`, it hashes only that `.env` and looks the hash up in
+   `frameworks/.index` (mode 600, lines `<sha256>  .env-<host>  <size>  <mtime>`, no token text, written atomically on each copy).
+   No other token file's contents are read. A hit counts only if `.env-<host>` still exists with the recorded
+   size and mtime (stat only). If not (no hit, stale or missing file, no index, a symlinked index, or a token
+   that predates the index),
+   the current `.env` is saved first as `.env-unsaved-<timestamp>`.
 
 ## Exit codes
 
 - `0`: copied, or no framework session (nothing changed)
 - `1`: not usable: config missing or incomplete, state file invalid, session ended, or gateway silent;
-  or the existing `.env` could not be backed up (backup path exists, or the backup failed its check).
+  or the existing `.env` could not be backed up (backup path exists, or the backup failed its check);
+  or the existing `.env` could not be hashed.
   Nothing is copied. (A failed copy or copy check also exits 1, after the backup.) Report the message.
 - `2`: no token file for this framework. Nothing was copied. The operator must add it.
 

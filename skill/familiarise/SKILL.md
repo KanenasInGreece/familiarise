@@ -37,9 +37,11 @@ uv run --with httpx python <shared-memory-dir>/scripts/memory_bridge.py doctor
 
 ## Citing records
 
-Record ids (`fact:N`, `decision:N`, `retrospective:N`) are numbered per framework store, so the same id can be a different record on another framework. After a link, the file `<this-skill-dir>/frameworks/linked` holds the name of the linked framework. Read that one line and qualify every citation with it, for example `workstation fact:3432`. When you save, add `"framework": "<name>"` to the metadata JSON.
+Record ids (`fact:N`, `decision:N`, `retrospective:N`) are numbered per framework store, so the same id can be a different record on another framework. The link output carries this rule into context: every record saved from then on belongs to the linked framework.
 
-The file names the last framework linked, and it stays after the tunnel closes. If no tunnel is open, do not trust it: connect first, or say which framework you are unsure of.
+Before you cite a record from memory, run `~/framework-tunnel.sh <host> status` for the linked framework (agents may run `status`). Cite it as `<host> fact:N` only if the output says `UP`. If it says `DOWN`, or names another host, do not cite the record as current: say which framework you cannot reach and connect first. When you save, add `"framework": "<host>"` to the metadata JSON.
+
+The file `<this-skill-dir>/frameworks/linked` names the last framework linked. It stays after the tunnel closes, so it is not proof of a live connection; only `status` is.
 
 ## Outcomes
 

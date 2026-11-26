@@ -296,6 +296,8 @@ if [ -L "$DEST" ] && [ "$(readlink -- "$DEST")" = "$TARGET" ]; then
     say "framework: $HOST"
     say "linked: $DEST -> $TARGET"
     say "$GATEWAY_LINE"
+    say "context: records saved from now on belong to $HOST. Before citing one, run"
+    say "context: '~/framework-tunnel.sh $HOST status'; cite it as '$HOST fact:N' only if it says UP."
     exit 0
 fi
 # The parent directory must allow creating and renaming entries; checked before any
@@ -364,4 +366,6 @@ record_framework || fail "the link is in place, but $FRAMEWORK_ENV_DIR/linked co
 say "framework: $HOST"
 say "linked: $DEST -> $TARGET"
 say "$GATEWAY_LINE"
+say "context: records saved from now on belong to $HOST. Before citing one, run"
+say "context: '~/framework-tunnel.sh $HOST status'; cite it as '$HOST fact:N' only if it says UP."
 exit 0

@@ -20,8 +20,12 @@ bash <this-skill-dir>/scripts/familiarise.sh
 ```
 familiarise: framework: workstation
 familiarise: linked: <...>/shared-memory/.env -> <...>/frameworks/.env-workstation
-familiarise: gateway:   localhost:8888 answers, version 1.0.39
+familiarise: gateway:   localhost:8888 health status ok, version 1.0.39
 ```
+
+The script does not judge the health status. Any `/health` reply with a status (`ok`, `degraded`, or other) links the framework and prints that status. A silent gateway, or a reply with no status, refuses.
+
+After linking, if the status is not `ok`, run the shared-memory `doctor` to see which backend is down. A degraded framework can still work, so do not treat a non-ok status as a failed link.
 
 `--version` prints the installed version.
 
@@ -31,7 +35,7 @@ familiarise: gateway:   localhost:8888 answers, version 1.0.39
 |---|---|---|
 | 0 | Linked, or already linked to that framework | The framework name and the gateway line. If the output says `saved the previous .env to <path>`, also give that path: the user's unsaved token is there. |
 | 0 | No tunnel open (no state file). Nothing changed | Open the tunnel with `~/framework-tunnel.sh <host>`, then run this again. |
-| 1 | Refused or failed | The message as printed. Only a message starting `The previous .env token is at <path>` means the token is at that path. Any other message means `.env` still holds the token, or nothing changed: do not name a backup path as the token's location. |
+| 1 | Refused or failed (includes a gateway that gives no `/health` reply with a status) | The message as printed. Only a message starting `The previous .env token is at <path>` means the token is at that path. Any other message means `.env` still holds the token, or nothing changed: do not name a backup path as the token's location. |
 | 2 | No token file for this framework. Nothing changed | The operator must add `frameworks/.env-<framework>`. |
 | 143 | Killed by a signal. The temp link is removed | The message as printed, including any "token is at" path. |
 

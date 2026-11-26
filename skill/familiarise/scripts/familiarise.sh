@@ -30,7 +30,7 @@
 # Exit codes (default run):
 #   0  linked, already linked, or no tunnel is open (which changes nothing)
 #   1  any refusal or failure: config missing or incomplete, state file invalid, session ended,
-#      or gateway silent; token file is a symlink or resolves outside FRAMEWORK_ENV_DIR; the
+#      or gateway gives no /health reply with a status field; token file is a symlink or resolves outside FRAMEWORK_ENV_DIR; the
 #      skill directory is not writable; DEST is neither a regular file nor a symlink; backup
 #      path exists or the move failed; link creation or rename failed; verification failed.
 #      On a refusal before the backup move, nothing changed.
@@ -290,10 +290,14 @@ esac
     || fail "the tunnel session for '$HOST' has ended (stale $STATE_FILE). Nothing changed."
 
 # --- gateway must answer on localhost ----------------------------------------------
+# Any /health reply with a "status" field counts as an answer, whatever its value. A degraded
+# framework can still work (one backend down), so the agent judges the status with doctor.
 HEALTH="$(curl -s -m 5 "http://localhost:${LOCAL_PORT}/health")"
-echo "$HEALTH" | grep -q '"status": *"ok"' \
-    || fail "localhost:$LOCAL_PORT does not answer /health. Nothing changed."
+echo "$HEALTH" | grep -q '"status"' \
+    || fail "localhost:$LOCAL_PORT gives no /health reply with a status. Nothing changed."
 GATEWAY_VERSION="$(echo "$HEALTH" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
+GATEWAY_STATUS="$(echo "$HEALTH" | sed -n 's/.*"status": *"\([^"]*\)".*/\1/p')"
+GATEWAY_LINE="gateway:   localhost:$LOCAL_PORT health status ${GATEWAY_STATUS:-unknown}, version ${GATEWAY_VERSION:-unknown}"
 
 # --- token file --------------------------------------------------------------------
 # Only file names and links are touched from here on: no token file is read, copied or hashed.
@@ -319,7 +323,7 @@ if [ -L "$DEST" ] && [ "$(readlink -- "$DEST")" = "$TARGET" ]; then
     say "already linked to $HOST"
     say "framework: $HOST"
     say "linked: $DEST -> $TARGET"
-    say "gateway:   localhost:$LOCAL_PORT answers, version ${GATEWAY_VERSION:-unknown}"
+    say "$GATEWAY_LINE"
     exit 0
 fi
 # The parent directory must allow creating and renaming entries; checked before any change.
@@ -383,5 +387,5 @@ fi
 # --- report (never reads a token) ---------------------------------------------------
 say "framework: $HOST"
 say "linked: $DEST -> $TARGET"
-say "gateway:   localhost:$LOCAL_PORT answers, version ${GATEWAY_VERSION:-unknown}"
+say "$GATEWAY_LINE"
 exit 0

@@ -20,15 +20,17 @@ The skill never opens tunnels, enters passwords or changes the gateway. The oper
 
 ## Requirements
 
-Linux. Needs bash, ssh, curl, git, GNU coreutils and flock (util-linux).
+Linux. Needs bash, ssh, curl, git, `cmp` (diffutils), flock (util-linux) and GNU coreutils.
 
 ## Repo layout
 
 | Path | Purpose |
 |---|---|
 | `skill/familiarise/` | The skill, installed into each agent |
-| `ops/framework-tunnel.sh` | Tunnel script, source of truth |
+| `ops/framework-tunnel.sh` | Tunnel script, source of truth (see `ops/README.md`) |
 | `tests/` | Fake ssh and fake gateway for end-to-end tests |
+
+`scripts/sync_local.sh` installs the skill and the tunnel script on one machine. `scripts/` is git-ignored, so it exists only in the operator's local checkout.
 
 ## Licence
 

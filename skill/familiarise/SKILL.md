@@ -25,7 +25,13 @@ familiarise: gateway:   localhost:8888 health status ok, version 1.0.39
 
 The script does not judge the health status. Any `/health` reply with a status (`ok`, `degraded`, or other) links the framework and prints that status. A silent gateway, or a reply with no status, refuses.
 
-After linking, if the status is not `ok`, run the shared-memory `doctor` to see which backend is down. A degraded framework can still work, so do not treat a non-ok status as a failed link.
+After linking, if the status is not `ok`, run the shared-memory doctor to see which backend is down:
+
+```bash
+uv run --with httpx python <shared-memory-dir>/scripts/memory_bridge.py doctor
+```
+
+`<shared-memory-dir>` is the shared-memory skill directory (the `SHARED_MEMORY_SKILL_DIR` setting in this skill's `.env`; read that one value, never the token). A degraded framework can still work, so a non-ok status is not a failed link.
 
 `--version` prints the installed version.
 

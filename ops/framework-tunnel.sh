@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# framework-tunnel.sh — open a tunnel to one framework's shared-memory gateway for one session.
+# framework-tunnel.sh — open a tunnel to one framework's gateway for one session.
 #
-# Usage:
-#   framework-tunnel.sh <host>           open the tunnel and start a session shell
-#   framework-tunnel.sh <host> stop      close the tunnel (run from another terminal)
-#   framework-tunnel.sh <host> status    report whether the tunnel to <host> is up
+# Usage: framework-tunnel.sh <host> [start|stop|status]
 #
-# start and stop refuse unless stdin is a terminal (operator-only; a guard against accidents,
-# not authentication). status works from anywhere.
+# start and stop refuse unless stdin is a terminal. That guards against accidents; it is
+# not authentication. status works from anywhere.
 #
-# <host> is an ssh alias from ~/.ssh/config. The tunnel is localhost:8888 -> <host>:localhost:8888.
+# <host> is an ssh alias. start asks for the ssh password in this terminal, then
+# announces the tunnel in the state file and starts a session shell. Exiting that shell
+# closes the tunnel. stop HUPs the shell, so unsaved work in it is lost.
 #
-# Opening: ssh asks for passphrases or passwords in this terminal, by hand. Then the tunnel is
-# announced in ~/.config/shared-memory/active-framework (any agent can read it) and a session
-# shell starts. Exiting that shell closes the tunnel and removes the file. `stop` does the same
-# by ending that shell, which HUPs it and loses any unsaved work there.
-#
-# Test overrides (leave unset in normal use): FRAMEWORK_TUNNEL_SSH, FRAMEWORK_TUNNEL_LOCAL_PORT,
-# FRAMEWORK_TUNNEL_REMOTE_PORT, FRAMEWORK_TUNNEL_STATE_DIR.
+# Test overrides (leave unset in normal use): FRAMEWORK_TUNNEL_SSH,
+# FRAMEWORK_TUNNEL_LOCAL_PORT, FRAMEWORK_TUNNEL_REMOTE_PORT, FRAMEWORK_TUNNEL_STATE_DIR.
 set -uo pipefail
 
 SSH="${FRAMEWORK_TUNNEL_SSH:-ssh}"
@@ -50,7 +44,8 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
         echo "✗ a test override is set, so FRAMEWORK_TUNNEL_STATE_DIR must be set to a scratch folder too." >&2
         exit 1
     fi
-    # Compare resolved real paths against the passwd home, not $HOME, so HOME=/other cannot hide it.
+    # Compare resolved real paths against the passwd home, not $HOME, so HOME=/other
+    # cannot hide it.
     REAL_HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
     if [ -z "$REAL_HOME" ]; then
         echo "✗ cannot resolve the passwd home directory (getent returned nothing), so the real-state-dir guard cannot be checked. Refusing." >&2
@@ -63,8 +58,8 @@ if [ -n "${FRAMEWORK_TUNNEL_SSH:-}${FRAMEWORK_TUNNEL_LOCAL_PORT:-}${FRAMEWORK_TU
     fi
 fi
 
-# start and stop are operator-only (a terminal on stdin); status is open to agents. This guards
-# against accidents (an agent running stop by mistake). It is not authentication.
+# start and stop are operator-only (a terminal on stdin); status is open to agents. This
+# guards against accidents (an agent running stop by mistake). It is not authentication.
 if [ "$ACTION" != "status" ] && [ ! -t 0 ]; then
     echo "✗ $ACTION is operator-only: run it from your own terminal." >&2
     exit 1
@@ -77,7 +72,8 @@ port_busy() {
 }
 
 # Any /health reply with a "status" field means the gateway answers, whatever the value.
-# A degraded framework can still work (one backend down), so the agent judges it with doctor.
+# A degraded framework can still work (one backend down), so the agent judges it with
+# doctor.
 gateway_ok() {
     curl -s -m 5 "http://localhost:${LOCAL_PORT}/health" | grep -q '"status"'
 }
@@ -107,7 +103,8 @@ read_state() {
     return 0
 }
 
-# Closes the ssh master on socket $1 (default: this session's own), which closes the forward.
+# Closes the ssh master on socket $1 (default: this session's own), which closes the
+# forward.
 close_master() {
     local s="${1:-$SOCK}"
     master_up "$s" && "$SSH" -S "$s" -O exit "$HOST" >/dev/null 2>&1
@@ -165,9 +162,9 @@ do_status() {
     exit 1
 }
 
-# Ask the session shell to exit, which closes the tunnel and removes the state. Exits 1 if
-# the shell is busy (the close stays pending), its pid cannot be trusted, or the open tunnel
-# is to another host. Exits 0 with "no tunnel open" when none is open.
+# Ask the session shell to exit, which closes the tunnel and removes the state. Exits 1
+# if the shell is busy (the close stays pending), its pid cannot be trusted, or the open
+# tunnel is to another host. Exits 0 with "no tunnel open" when none is open.
 do_stop() {
     if ! read_state; then
         echo "no tunnel open"
@@ -178,10 +175,8 @@ do_stop() {
         exit 1
     fi
     if [ -n "$S_SHELL" ]; then
-        # Only signal a pid that is still this session's shell: the session script must be
-        # alive and the pid its child, started as
-        # `bash --rcfile <state dir>/session-rc.<main pid> -i`. After a crash the pid may have
-        # been reused by an unrelated process.
+        # Signals only a pid that is still this session's shell. After a crash the pid
+        # may have been reused, so the shell must match its rcfile and parent pid.
         if ! pid_alive "$S_MAIN"; then
             echo "✗ session pid $S_MAIN is gone, so shell pid $S_SHELL cannot be trusted. Not signalling it." >&2
             echo "  State left in $STATE_FILE. Run: $NAME $HOST start (clears stale state), or remove it by hand." >&2
@@ -192,8 +187,9 @@ do_stop() {
             echo "  State left in $STATE_FILE for you to inspect." >&2
             exit 1
         fi
-        # The session shell traps HUP and exits, but bash runs that trap only after the foreground
-        # command ends. So HUP the shell, then HUP its running children (the foreground job).
+        # The session shell traps HUP and exits, but bash runs that trap only after the
+        # foreground command ends. So HUP the shell, then HUP its running children (the
+        # foreground job).
         kill -HUP "$S_SHELL" 2>/dev/null
         for c in $(ps -o pid= --ppid "$S_SHELL" 2>/dev/null); do kill -HUP "$c" 2>/dev/null; done
         for _ in $(seq 1 40); do
@@ -216,12 +212,13 @@ do_stop() {
     echo "tunnel to '$HOST' closed"
 }
 
-# Start lock: held from the checks until the state file is written, so two starts cannot both
-# pass. An atomic mkdir with the owner pid inside; unlike flock it leaves no empty start.lock.
+# Start lock: held from the checks until the state file is written, so two starts cannot
+# both pass. An atomic mkdir with the owner pid inside; unlike flock it leaves no empty
+# start.lock.
 LOCK="$STATE_DIR/start.lock"
 LOCK_KIND=""
-# Take the start lock, breaking a stale one (dead owner, or ownerless and older than 5 s).
-# Globals: sets LOCK_KIND. Returns: 1 if another start holds it.
+# Take the start lock, breaking a stale one (dead owner, or ownerless and older than 5
+# s). Globals: sets LOCK_KIND. Returns: 1 if another start holds it.
 acquire_lock() {
     local tries=0 owner stale
     while ! mkdir "$LOCK.d" 2>/dev/null; do
@@ -229,13 +226,15 @@ acquire_lock() {
         [ "$tries" -le 5 ] || return 1
         owner="$(cat "$LOCK.d/pid" 2>/dev/null)"
         if [ -z "$owner" ]; then
-            # The holder may be between mkdir and writing its pid: held, unless the dir is old.
+            # The holder may be between mkdir and writing its pid: held, unless the dir
+            # is old.
             [ $(( $(date +%s) - $(stat -c %Y "$LOCK.d" 2>/dev/null || echo 0) )) -lt 5 ] && return 1
         elif pid_alive "$owner"; then
             return 1
         fi
-        # Stale: take it by atomic rename, so only one contender wins. If what we moved is not
-        # the stale lock we judged (a new holder got in first), put it back and report busy.
+        # Stale: take it by atomic rename, so only one contender wins. If what we moved
+        # is not the stale lock we judged (a new holder got in first), put it back and
+        # report busy.
         stale="$LOCK.stale.$$"
         if mv "$LOCK.d" "$stale" 2>/dev/null; then
             if [ "$(cat "$stale/pid" 2>/dev/null)" != "$owner" ]; then
@@ -257,14 +256,14 @@ release_lock() {
     LOCK_KIND=""
 }
 
-# Open the tunnel and run the session shell until it exits. Only start creates the state dir.
-# Globals: sets SOCK (per session); writes STATE_FILE and the session rcfile.
+# Open the tunnel and run the session shell until it exits. Only start creates the state
+# dir. Globals: sets SOCK (per session); writes STATE_FILE and the session rcfile.
 do_start() {
     SOCK="$STATE_DIR/ssh-$LOCAL_PORT-$$.sock"          # this session's own socket
     mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"   # only start creates the state dir; status stays read-only
-    # Release the lock and close this session's own master (if ssh got that far) on every way
-    # out. For signals, bash runs the trap after the foreground command ends, and the EXIT
-    # trap runs after `exit 1`.
+    # Release the lock and close this session's own master (if ssh got that far) on
+    # every way out. For signals, bash runs the trap after the foreground command ends,
+    # and the EXIT trap runs after `exit 1`.
     trap 'release_lock; own_cleanup' EXIT
     trap 'exit 1' HUP INT TERM
     if ! acquire_lock; then
@@ -289,7 +288,8 @@ do_start() {
     echo "Opening tunnel: localhost:$LOCAL_PORT -> $HOST:localhost:$REMOTE_PORT"
     echo "ssh may ask for your passphrase or password here."
     rm -f "$SOCK"
-    # ssh authenticates in this terminal, then forks into the background as the control master.
+    # ssh authenticates in this terminal, then forks into the background as the control
+    # master.
     if ! "$SSH" -M -S "$SOCK" -f -N \
             -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             -o ConnectTimeout=15 -L "$LOCAL_PORT:localhost:$REMOTE_PORT" "$HOST"; then
@@ -318,13 +318,13 @@ do_start() {
 [ -f ~/.bashrc ] && . ~/.bashrc
 echo "SHELL_PID=\$\$" >> "$STATE_FILE"
 rm -f "$rc"
-# \`stop\` sends HUP to this shell. End the shell on it, so the session script can close the tunnel.
+# \`stop\` sends HUP here. Exiting on it lets the session script close the tunnel.
 trap 'exit 0' HUP
 EOF
     trap "release_lock; own_cleanup; rm -f '$rc'" EXIT
-    # While the session shell runs, bash waits for it, so a HUP or TERM sent to this script is
-    # handled only after the shell exits; it then exits 1 (the EXIT trap closes the tunnel).
-    # Ctrl-C is ignored here, so it goes to the session shell only.
+    # While the session shell runs, bash waits for it, so a HUP or TERM sent to this
+    # script is handled only after the shell exits; it then exits 1 (the EXIT trap
+    # closes the tunnel). Ctrl-C is ignored here, so it goes to the session shell only.
     trap : INT
     trap 'exit 1' HUP TERM
 

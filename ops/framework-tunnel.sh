@@ -76,8 +76,10 @@ port_busy() {
     ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${LOCAL_PORT}\$"
 }
 
+# Any /health reply with a "status" field means the gateway answers, whatever the value.
+# A degraded framework can still work (one backend down), so the agent judges it with doctor.
 gateway_ok() {
-    curl -s -m 5 "http://localhost:${LOCAL_PORT}/health" | grep -q '"status": *"ok"'
+    curl -s -m 5 "http://localhost:${LOCAL_PORT}/health" | grep -q '"status"'
 }
 
 master_up() {
@@ -159,7 +161,7 @@ do_status() {
         echo "tunnel: UP   localhost:$LOCAL_PORT -> $HOST (session pid $S_MAIN)"
         exit 0
     fi
-    echo "tunnel: session is open, but the gateway on localhost:$LOCAL_PORT does not answer"
+    echo "tunnel: session is open, but the gateway on localhost:$LOCAL_PORT gives no /health reply with a status"
     exit 1
 }
 
@@ -302,7 +304,7 @@ do_start() {
         sleep 0.5
     done
     if ! gateway_ok; then
-        echo "✗ the tunnel is up, but the gateway on localhost:$LOCAL_PORT does not answer /health" >&2
+        echo "✗ the tunnel is up, but the gateway on localhost:$LOCAL_PORT gives no /health reply with a status" >&2
         close_master "$SOCK"
         exit 1
     fi

@@ -2,6 +2,7 @@
 # familiarise.sh — point this agent's shared memory at the open framework's tunnel.
 #
 # Reads the open tunnel from the state file and checks that the gateway answers /health.
+# Writes the linked framework's name to FRAMEWORK_ENV_DIR/linked for citations.
 # It then points SHARED_MEMORY_SKILL_DIR/.env at that framework's token file with a
 # symlink. It never reads, copies or prints a token; a plain .env is moved aside.
 #
@@ -277,12 +278,26 @@ FW_REAL="$(readlink -f -- "$FRAMEWORK_ENV_DIR")" && [ "$(readlink -f -- "$TARGET
     || fail "token file for '$HOST' resolves outside $FRAMEWORK_ENV_DIR. Nothing changed."
 
 DEST="$SHARED_MEMORY_SKILL_DIR/.env"
-# (a) already linked: nothing to do.
+# Records the linked framework in FRAMEWORK_ENV_DIR/linked, so agents can qualify record ids.
+# Record ids are numbered per framework store, so the name must travel with the citation.
+# Globals: HOST, FRAMEWORK_ENV_DIR (read). Writes atomically through a temp file, mode 600.
+# Returns: 1 if the file could not be written.
+record_framework() {
+    local t
+    t="$(mktemp "$FRAMEWORK_ENV_DIR/.linked.XXXXXX")" || return 1
+    { printf '%s\n' "$HOST" > "$t" && chmod 600 -- "$t" && mv -f -- "$t" "$FRAMEWORK_ENV_DIR/linked"; } \
+        || { rm -f -- "$t"; return 1; }
+}
+
+# (a) already linked: nothing to do, except to record the framework.
 if [ -L "$DEST" ] && [ "$(readlink -- "$DEST")" = "$TARGET" ]; then
+    record_framework || fail "could not write $FRAMEWORK_ENV_DIR/linked. Nothing changed."
     say "already linked to $HOST"
     say "framework: $HOST"
     say "linked: $DEST -> $TARGET"
     say "$GATEWAY_LINE"
+    say "context: records saved from now on belong to $HOST. Cite them as '$HOST fact:N'."
+    say "context: if a search fails, the framework is not connected: do not answer from memory."
     exit 0
 fi
 # The parent directory must allow creating and renaming entries; checked before any
@@ -347,7 +362,10 @@ else
 fi
 
 # --- report (never reads a token) ---------------------------------------------------
+record_framework || fail "the link is in place, but $FRAMEWORK_ENV_DIR/linked could not be written."
 say "framework: $HOST"
 say "linked: $DEST -> $TARGET"
 say "$GATEWAY_LINE"
+say "context: records saved from now on belong to $HOST. Cite them as '$HOST fact:N'."
+say "context: if a search fails, the framework is not connected: do not answer from memory."
 exit 0

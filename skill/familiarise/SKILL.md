@@ -35,6 +35,14 @@ uv run --with httpx python <shared-memory-dir>/scripts/memory_bridge.py doctor
 
 `--version` prints the installed version.
 
+## Citing records
+
+Record ids (`fact:N`, `decision:N`, `retrospective:N`) are numbered per framework store, so the same id can be a different record on another framework. The link output puts this rule into context: every record saved from then on belongs to the linked framework. Cite records as `<host> fact:N`, and add `"framework": "<host>"` to the metadata JSON when you save.
+
+Retrieval goes to whichever tunnel is open, with the linked token. If the tunnel is down, or the token does not match the open gateway, the search fails. A failed search means the framework is not connected: say so, and do not answer from memory.
+
+The file `<this-skill-dir>/frameworks/linked` names the last framework linked. It stays after the tunnel closes, so use it only to qualify citations.
+
 ## Outcomes
 
 | Exit | Situation | Tell the user |
